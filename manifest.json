@@ -2,6 +2,7 @@
   "name": "Dinners",
   "short_name": "Dinners",
   "description": "This week's dinners, recipes and swaps, from the Dinner recipes Sheet.",
+  "id": "/Dinners/?app=dinners",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
