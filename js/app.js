@@ -157,6 +157,7 @@ function show() {
 	if (current.name === "swap") return screenSwap(a.day);
 	if (current.name === "recipes") return screenRecipes();
 	if (current.name === "shopping") return screenShopping();
+	if (current.name === "plan") return screenPlan();
 	if (current.name === "settings") return screenSettings();
 	if (!getSettings().url) return screenSettings(true);
 	return screenWeek();
@@ -189,9 +190,12 @@ function dayRow(d, w, compact) {
 
 function weekList(w, compact) {
 	return el("div", { class: "days" }, w.days.map(function (d) { return dayRow(d, w, compact); }),
-		el("div", { class: "next" },
-			el("b", null, w.nextWeek.planned ? "Next week: " + w.nextWeek.planned + " of 7 nights in the calendar" : "Next week isn't planned yet"),
-			el("span", { class: "small muted" }, w.nextWeek.range + " \u00b7 Planning from suggestions comes in the next update")));
+		el("button", { type: "button", class: "next", onclick: function () { go("plan"); } },
+			el("span", { class: "row", style: "width:100%" },
+				el("span", { class: "stack", style: "gap:2px" },
+					el("b", null, w.nextWeek.planned >= 7 ? "Next week is planned" : w.nextWeek.planned ? "Next week: " + w.nextWeek.planned + " of 7 nights planned" : "Next week isn't planned yet"),
+					el("span", { class: "small muted" }, w.nextWeek.range)),
+				el("span", { class: "planbtn" }, w.nextWeek.planned >= 7 ? "See it" : "Plan"))));
 }
 
 function screenWeek() {
@@ -423,6 +427,152 @@ function pickCard(r, sub, onclick) {
 		el("div", { class: "stack", style: "gap:3px;flex:1;min-width:0" },
 			el("div", { class: "t" }, r.title),
 			el("div", { class: "small muted" }, r.beth ? el("b", { style: "color:var(--beth)" }, badgeText(" \u00b7 ")) : null, sub)));
+}
+
+/* ---------------- plan next week ---------------- */
+var DRAFT_KEY = "dinners.plan.";
+function loadDraft(weekStart) {
+	try { return JSON.parse(localStorage.getItem(DRAFT_KEY + weekStart) || "null"); } catch (e) { return null; }
+}
+function saveDraft(weekStart, draft) {
+	try {
+		Object.keys(localStorage).forEach(function (k) { if (k.indexOf(DRAFT_KEY) === 0 && k !== DRAFT_KEY + weekStart) localStorage.removeItem(k); });
+		if (draft) localStorage.setItem(DRAFT_KEY + weekStart, JSON.stringify(draft)); else localStorage.removeItem(DRAFT_KEY + weekStart);
+	} catch (e) { /* private window: the plan just isn't kept */ }
+}
+
+function screenPlan() {
+	loading(main);
+	call("planOptions", { exclude: [] }).then(function (o) {
+		var start = o.week.start;
+		var draft = loadDraft(start) || {};
+		var picks = draft.picks || {}; // day key -> { id, title, beth, minutes }
+		var shown = draft.shown && draft.shown.length ? draft.shown : o.suggestions;
+		var bethOnly = false;
+		var photos = {}; // id -> data URL, for photos kept in the Sheet
+		// nights that already have a dinner in the calendar can't be picked over
+		o.days.forEach(function (d) { if (d.dinner) delete picks[d.key]; });
+		var keep = function () { saveDraft(start, { picks: picks, shown: shown }); };
+
+		var nights = el("div", { class: "list nights" });
+		var cards = el("div", { class: "scards" });
+		var count = el("span", { class: "small muted" });
+		var saveBtn = el("button", { type: "button", class: "btn primary" }, "Save the week");
+		var moreBtn = el("button", { type: "button", class: "btn" }, "Show more suggestions");
+		var bethBtn = el("button", { type: "button", class: "toggle", "aria-pressed": "false" }, badgeText(" only"));
+
+		var pickedDay = function (id) {
+			for (var k in picks) if (picks[k].id === id) return k;
+			return null;
+		};
+		var dayOf = function (key) { return o.days.filter(function (d) { return d.key === key; })[0]; };
+		var draw = function () {
+			var planned = 0;
+			nights.textContent = "";
+			o.days.forEach(function (d) {
+				var p = picks[d.key];
+				if (d.dinner || p) planned++;
+				nights.appendChild(el("div", { class: "night" + (d.dinner ? " fixed" : p ? " picked" : " free") },
+					el("b", { class: "nd" }, d.label),
+					el("span", { class: "nt" }, d.dinner ? d.dinner.title : p ? p.title : "Pick from below"),
+					d.dinner ? el("span", { class: "small muted" }, "in calendar")
+						: p ? el("button", { type: "button", class: "x", "aria-label": "Remove from " + d.dayName, onclick: function () { delete picks[d.key]; keep(); draw(); } }, "×") : null));
+			});
+			count.textContent = planned + " of 7 nights planned";
+			var newPicks = Object.keys(picks).length;
+			saveBtn.disabled = newPicks === 0;
+			saveBtn.textContent = newPicks ? "Save the week (" + newPicks + " new)" : "Save the week";
+			cards.textContent = "";
+			var list = shown.filter(function (r) { return !bethOnly || r.beth; });
+			if (!list.length) cards.appendChild(el("div", { class: "small muted" }, bethOnly ? "No " + badgeText("") + " recipes in these suggestions. Try Show more." : "No suggestions: everything was had recently."));
+			list.forEach(function (r) {
+				var on = pickedDay(r.id);
+				var img = r.photo || photos[r.id];
+				cards.appendChild(el("button", { type: "button", class: "scard" + (on ? " on" : ""), onclick: function () { popup(r); } },
+					img ? photo(img) : r.sheetPhoto ? el("span", { class: "noimg" }) : null,
+					el("span", { class: "sc" },
+						el("span", { class: "t" }, r.title),
+						on ? el("span", { class: "small onday" }, "✓ On " + dayOf(on).dayName)
+							: el("span", { class: "small muted" }, r.beth ? el("b", { style: "color:var(--beth)" }, badgeText(" · ")) : null, (r.minutes ? r.minutes + " min · " : "") + (r.kind === "favourite" ? "favourite" : "surprise")))));
+			});
+		};
+		// photos kept in the Sheet arrive one by one
+		var fetchPhotos = function () {
+			shown.filter(function (r) { return r.sheetPhoto && !photos[r.id]; }).forEach(function (r) {
+				call("photo", { id: r.id }).then(function (res) { if (res.photo) { photos[r.id] = res.photo; draw(); } }).catch(function () { /* no photo */ });
+			});
+		};
+
+		var popup = function (r) {
+			var free = o.days.filter(function (d) { return !d.dinner && !picks[d.key]; });
+			var on = pickedDay(r.id);
+			var body = el("div", { class: "stack" }, el("div", { class: "loading" }, "Loading…"));
+			var close = function () { overlay.remove(); };
+			var overlay = el("div", { class: "overlay", onclick: function (e) { if (e.target === overlay) close(); } },
+				el("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": r.title },
+					el("div", { class: "row" }, el("h2", { style: "color:var(--text);font-size:20px;letter-spacing:0;text-transform:none" }, r.title),
+						el("button", { type: "button", class: "x", "aria-label": "Close", onclick: close }, "×")),
+					body,
+					el("div", { class: "stack", style: "gap:8px" },
+						el("h2", null, on ? "On " + dayOf(on).dayName : "Put it on"),
+						on ? el("button", { type: "button", class: "btn", onclick: function () { delete picks[on]; keep(); draw(); close(); } }, "Take it off " + dayOf(on).dayName)
+							: free.length ? el("div", { class: "daygrid" }, free.map(function (d) {
+								return el("button", { type: "button", onclick: function () { picks[d.key] = { id: r.id, title: r.title, beth: r.beth, minutes: r.minutes }; keep(); draw(); close(); toast(r.title + " on " + d.dayName); } }, d.label);
+							})) : el("div", { class: "small muted" }, "Every night is planned. Remove one with × to make room."))));
+			document.body.appendChild(overlay);
+			call("recipe", { id: r.id }).then(function (full) {
+				body.textContent = "";
+				add(body, [
+					el("div", { class: "rhead" },
+						el("div", { class: "words" }, chips(full, true), el("div", { class: "small muted" }, full.lastHad)),
+						full.photo ? photo(full.photo) : null),
+					full.notes ? el("div", { class: "notes small" }, full.notes) : null,
+					el("div", { class: "small" }, el("b", null, "Ingredients for " + full.household + ": "),
+						full.ingredients.map(function (i) { var x = FridgeScale.scaleIngredient(i, full.servings, full.household); return (x.amount ? x.amount + " " : "") + x.item; }).join(" · "))
+				]);
+			}).catch(function (e) { body.textContent = e.message; });
+		};
+
+		moreBtn.addEventListener("click", function () {
+			moreBtn.disabled = true;
+			var keepIds = Object.keys(picks).map(function (k) { return picks[k].id; });
+			var seen = shown.map(function (r) { return r.id; });
+			call("planOptions", { exclude: seen.concat(keepIds) }).then(function (res) {
+				var kept = shown.filter(function (r) { return pickedDay(r.id); });
+				if (!res.suggestions.length) { toast("That's every recipe that fits. Showing the first ones again."); res = o; }
+				shown = kept.concat(res.suggestions.filter(function (r) { return !pickedDay(r.id); }));
+				keep(); draw(); fetchPhotos();
+				window.scrollTo(0, cards.offsetTop - 80);
+			}).catch(function (e) { toast(e.message); }).finally(function () { moreBtn.disabled = false; });
+		});
+		bethBtn.addEventListener("click", function () { bethOnly = !bethOnly; bethBtn.setAttribute("aria-pressed", String(bethOnly)); draw(); });
+		saveBtn.addEventListener("click", function () {
+			var list = Object.keys(picks).map(function (k) { return { day: k, recipeId: picks[k].id }; });
+			saveBtn.disabled = true;
+			saveBtn.textContent = "Saving…";
+			call("savePlan", { picks: list }).then(function (res) {
+				saveDraft(start, null);
+				cache.week = null;
+				toast(res.saved.length + " dinner" + (res.saved.length === 1 ? "" : "s") + " saved" + (res.skipped.length ? ". " + res.skipped.length + " night" + (res.skipped.length === 1 ? " was" : "s were") + " already taken" : ""));
+				go("plan", {}, true);
+			}).catch(function (e) { toast(e.message); draw(); });
+		});
+
+		draw();
+		fetchPhotos();
+		main.textContent = "";
+		add(main, [
+			el("button", { type: "button", class: "back", onclick: back }, icon("back"), "Back"),
+			el("div", { class: "row", style: "align-items:baseline" }, el("h1", { style: "font-size:24px" }, "Plan " + o.week.range), null),
+			el("section", { class: "stack" }, el("div", { class: "row" }, el("h2", null, "The week"), count), nights),
+			el("section", { class: "stack" },
+				el("div", { class: "row" }, el("h2", null, "Suggestions"), el("span", { class: "small muted" }, "Tap one to see it")),
+				el("div", null, bethBtn),
+				cards, moreBtn),
+			el("div", { class: "stack savebar" }, saveBtn,
+				el("div", { class: "small muted", style: "text-align:center" }, "Empty nights stay empty. Saving puts the dinners in the calendar, and on the fridge."))
+		]);
+	}).catch(function (e) { showError(main, e, screenPlan); });
 }
 
 /* ---------------- all recipes ---------------- */
