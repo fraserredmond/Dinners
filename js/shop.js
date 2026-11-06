@@ -1,0 +1,223 @@
+/* The shopping list: the week's dinners (scaled to the household), the regulars and anything
+ * added by hand, combined into one line per item, grouped by shop section and put in the order
+ * you walk round the shop. Needs FridgeScale (scale.js).
+ * Works in Node (require) and as a plain script (globalThis.FridgeShop). */
+"use strict";
+
+(function (root) {
+	const Scale = typeof module !== "undefined" && module.exports ? require("./scale.js") : root.FridgeScale;
+	const WHOLE = ["tin", "carton", "pack", "jar", "bunch", "slice", ""]; // bought whole: round up
+	const OTHER = "Other";
+
+	/** Letters only, lower case, no accents: "Crème Fraîche" -> "creme fraiche" */
+	function plain(s) {
+		return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+			.replace(/[^a-z0-9]+/g, " ").trim();
+	}
+
+	/** One key per item, whatever the plural or capitals: "Garlic Cloves" and "garlic clove" match. */
+	function itemKey(item) {
+		const words = plain(item).split(" ").filter(Boolean);
+		return words.map(function (w) { return w.length > 3 ? Scale.singular(w) : w; }).join(" ");
+	}
+
+	function capital(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+	/** How a total reads: 1250g -> "1.25kg", 2 tins -> "2 tins", 10 -> "10" */
+	function amountText(q, unit) {
+		if (unit === "g" && q >= 1000) return Scale.formatQty(Math.round(q / 10) / 100) + "kg";
+		if (unit === "ml" && q >= 1000) return Scale.formatQty(Math.round(q / 10) / 100) + "l";
+		if (!unit) return Scale.formatQty(q);
+		if (unit === "g" || unit === "ml") return Scale.formatQty(q) + unit;
+		const plural = q > 1 && ["tin", "carton", "pack", "jar", "bunch", "slice"].indexOf(unit) !== -1 ? (unit === "bunch" ? "es" : "s") : "";
+		return Scale.formatQty(q) + " " + unit + plural;
+	}
+
+	/** The shortest name for a recipe: "Ribollita" rather than "Tuscan Ribollita Inspired Soup". */
+	function shortName(r) {
+		return [r.title].concat(r.aliases || []).filter(Boolean)
+			.reduce(function (a, b) { return b.length < a.length ? b : a; });
+	}
+
+	/** The Shop order tab as rules: [{ section, order, words: ["apple", ...] }] */
+	function orderRules(rows) {
+		return (rows || []).map(function (r, i) {
+			return {
+				section: plain(r.section), order: Number(r.order) || 999, row: i,
+				words: (Array.isArray(r.words) ? r.words : String(r.words || "").split(/[,;\n]/))
+					.map(function (w) { return itemKey(w); }).filter(Boolean)
+			};
+		});
+	}
+
+	/** Where an item goes within its section: [group, place in group]; unmatched items go last. */
+	function placeOf(key, section, rules) {
+		const words = key.split(" ");
+		let best = null;
+		rules.forEach(function (r) {
+			if (r.section !== plain(section)) return;
+			r.words.forEach(function (w, i) {
+				const hit = (" " + key + " ").indexOf(" " + w + " ") !== -1 ||
+					(w.length >= 4 && w.indexOf(" ") === -1 && words.some(function (x) { return x.length > w.length && x.slice(-w.length) === w; }));
+				if (!hit) return;
+				// the longest matching word wins ("chicken slices" beats "chicken"), then the earlier group
+				if (!best || w.length > best.len || (w.length === best.len && (r.order < best.order || (r.order === best.order && r.row < best.row)))) {
+					best = { len: w.length, order: r.order, row: r.row, i: i };
+				}
+			});
+		});
+		return best ? [best.order, best.row, best.i] : [1e9, 0, 0];
+	}
+
+	/**
+	 * Builds the list.
+	 * input: {
+	 *   dinners: [{ day, recipeId }], recipes: { id: { title, aliases, servings, ingredients: [...] } },
+	 *   household, regulars: [{ item, qty, section }], added: [{ item, qty, section }],
+	 *   unticked: [keys], sections: [{ name, order, onPaper }], order: [{ section, order, words }]
+	 * }
+	 * Returns { groups: [{ name, block, items: [{ key, name, qty, label, section, from, source, ticked }] }], count }
+	 */
+	function buildList(input) {
+		const household = Number(input.household) || 4;
+		const lines = {}; // key -> line
+		const add = function (key, make) {
+			if (!lines[key]) lines[key] = make();
+			return lines[key];
+		};
+		(input.dinners || []).forEach(function (d) {
+			const r = input.recipes && input.recipes[d.recipeId];
+			if (!r) return;
+			(r.ingredients || []).forEach(function (ing) {
+				if (ing.staple) return;
+				const item = String(ing.item || "").trim();
+				if (!item) return;
+				const key = itemKey(item);
+				const line = add(key, function () { return { key: key, names: [], totals: {}, loose: false, sections: {}, from: [], source: "dinner" }; });
+				line.names.push(item);
+				const unit = String(ing.unit || "").toLowerCase();
+				let q = typeof ing.qty === "number" && isFinite(ing.qty) ? ing.qty : null;
+				if (q === null) line.loose = true;
+				else {
+					if (ing.scale !== false && r.servings > 0 && r.servings !== household) q = Scale.roundQty(q * household / r.servings, unit);
+					const u = unit === "kg" ? "g" : unit === "l" ? "ml" : unit;
+					if (unit === "kg" || unit === "l") q *= 1000;
+					line.totals[u] = (line.totals[u] || 0) + q;
+				}
+				const sec = String(ing.section || "").trim();
+				if (sec) line.sections[sec] = (line.sections[sec] || 0) + 1;
+				const name = shortName(r);
+				if (line.from.indexOf(name) === -1) line.from.push(name);
+			});
+		});
+		(input.regulars || []).forEach(function (g) {
+			const item = String(g.item || "").trim();
+			if (!item) return;
+			const key = itemKey(item);
+			const line = add(key, function () { return { key: key, names: [], totals: {}, loose: false, sections: {}, from: [], source: "regular" }; });
+			line.names.unshift(item);
+			if (g.qty !== undefined && String(g.qty).trim() !== "") line.extra = String(g.qty).trim();
+			if (g.section) line.sections[g.section] = (line.sections[g.section] || 0) + 100; // the regulars tab says where it is
+			line.from.push("Every week");
+		});
+		(input.added || []).forEach(function (g) {
+			const item = String(g.item || "").trim();
+			if (!item) return;
+			const key = itemKey(item);
+			const line = add(key, function () { return { key: key, names: [], totals: {}, loose: false, sections: {}, from: [], source: "added" }; });
+			if (!line.names.length) line.names.push(item);
+			if (g.qty !== undefined && String(g.qty).trim() !== "") line.extra = String(g.qty).trim();
+			if (g.section) line.sections[g.section] = (line.sections[g.section] || 0) + 1000;
+			if (line.source !== "added") line.alsoAdded = true;
+			if (line.from.indexOf("Added") === -1) line.from.push("Added");
+		});
+
+		const unticked = {};
+		(input.unticked || []).forEach(function (k) { unticked[itemKey(k)] = true; });
+		const rules = orderRules(input.order);
+		const sections = (input.sections || []).slice().sort(function (a, b) { return (Number(a.order) || 999) - (Number(b.order) || 999); });
+		const known = {};
+		sections.forEach(function (s) { known[plain(s.name)] = s.name; });
+
+		const items = Object.keys(lines).map(function (key) {
+			const line = lines[key];
+			// the section most of its rows give, spelt as on the Shop sections tab
+			let section = OTHER, most = 0;
+			Object.keys(line.sections).forEach(function (s) { if (line.sections[s] > most) { most = line.sections[s]; section = known[plain(s)] || s; } });
+			// a plural name when there's more than one
+			const units = Object.keys(line.totals);
+			const parts = units.sort().map(function (u) {
+				let q = line.totals[u];
+				if (WHOLE.indexOf(u) !== -1) q = Math.ceil(q - 1e-9);
+				return amountText(q, u);
+			});
+			const many = units.length !== 1 || units[0] !== "" || line.totals[""] > 1;
+			const plural = line.names.filter(function (n) { return /s$/i.test(n); })[0];
+			let name = line.names[0] || key;
+			if (!many) name = Scale.singular(name);
+			else if (plural && line.source === "dinner") name = plural;
+			const qty = parts.length ? parts.join(" + ") : line.extra || "";
+			return {
+				key: key,
+				name: capital(name),
+				qty: line.extra && parts.length ? qty + ", " + line.extra : qty,
+				label: capital(name) + (qty ? " (" + (line.extra && parts.length ? qty + ", " + line.extra : qty) + ")" : ""),
+				section: section,
+				from: line.from.join(", "),
+				source: line.source,
+				ticked: !unticked[key],
+				place: placeOf(key, section, rules)
+			};
+		});
+
+		const order = sections.map(function (s) { return s.name; });
+		if (items.some(function (x) { return order.indexOf(x.section) === -1; })) {
+			items.forEach(function (x) { if (order.indexOf(x.section) === -1 && x.section !== OTHER) order.push(x.section); });
+			order.push(OTHER);
+		}
+		const groups = order.map(function (name) {
+			const s = sections.filter(function (x) { return x.name === name; })[0];
+			return {
+				name: name,
+				block: isBlock(s || { name: name }),
+				items: items.filter(function (x) { return x.section === name; }).sort(function (a, b) {
+					for (let i = 0; i < 3; i++) if (a.place[i] !== b.place[i]) return a.place[i] - b.place[i];
+					return a.name.localeCompare(b.name);
+				})
+			};
+		}).filter(function (g) { return g.items.length || g.name !== OTHER; });
+		groups.forEach(function (g) { g.items.forEach(function (x) { delete x.place; }); });
+		return { groups: groups, count: items.filter(function (x) { return x.ticked; }).length };
+	}
+
+	/** Bread and Tesco go across the page below the aisles; the On paper column can say otherwise. */
+	function isBlock(s) {
+		const v = plain(s.onPaper);
+		if (v === "block" || v === "row" || v === "across") return true;
+		if (v === "column") return false;
+		return /bread|back wall|tesco|other/i.test(s.name || "");
+	}
+
+	/**
+	 * The printed page: aisle columns (each as long as the longest, plus 2 blank lines),
+	 * then each block (Bread, Tesco) across the page in 4 columns. Only ticked items.
+	 */
+	function paper(list) {
+		const ticked = function (g) { return g.items.filter(function (x) { return x.ticked; }).map(function (x) { return x.label; }); };
+		const columns = list.groups.filter(function (g) { return !g.block; }).map(function (g) { return { name: g.name, lines: ticked(g) }; });
+		const rows = Math.max(0, Math.max.apply(null, columns.map(function (c) { return c.lines.length; }).concat([0]))) + 2;
+		columns.forEach(function (c) { while (c.lines.length < rows) c.lines.push(""); });
+		const blocks = list.groups.filter(function (g) { return g.block; }).map(function (g) {
+			const lines = ticked(g);
+			if (!lines.length && g.name === OTHER) return null;
+			const fill = Math.max(4, Math.ceil(lines.length / 4) * 4);
+			while (lines.length < fill) lines.push("");
+			return { name: g.name, lines: lines };
+		}).filter(Boolean);
+		return { columns: columns, blocks: blocks };
+	}
+
+	const api = { itemKey, buildList, paper, plain, shortName, OTHER };
+	if (typeof module !== "undefined" && module.exports) module.exports = api;
+	else root.FridgeShop = api;
+})(typeof globalThis !== "undefined" ? globalThis : this);

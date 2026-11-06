@@ -224,6 +224,9 @@ function show() {
 	renderNav();
 	main.classList.toggle("plain", false);
 	main.style.opacity = ""; // a save dims the screen while it works
+	document.body.classList.remove("shopping");
+	var paper = document.getElementById("printsheet");
+	if (paper) paper.remove();
 	window.scrollTo(0, 0);
 	var a = current.args;
 	if (wide.matches) renderSide();
@@ -779,15 +782,159 @@ function screenRecipes() {
 	}).catch(function (e) { showError(main, e, screenRecipes); });
 }
 
-/* ---------------- shopping (next update) ---------------- */
+/* ---------------- shopping ---------------- */
+var shopOffset = 1; // which week the list is for: 1 = next week, 0 = this week
+
 function screenShopping() {
-	main.textContent = "";
-	add(main, [
-		el("h1", null, "Shopping"),
-		el("div", { class: "card stack" },
-			el("b", null, "The shopping list comes in a later update."),
-			el("span", { class: "muted" }, "It will be built from the week's dinners plus your regular items, grouped the way you walk round the shop, ready to print."))
-	]);
+	loading(main);
+	document.body.classList.add("shopping");
+	call("shopping", { offset: shopOffset }).then(function (s) {
+		if (current.name !== "shopping") return;
+		var state = { unticked: s.saved.unticked.slice(), added: s.saved.added.slice() };
+		var known = {};
+		(s.known || []).forEach(function (k) { known[FridgeShop.itemKey(k[0])] = k[1]; });
+		var sectionNames = s.sections.map(function (x) { return x.name; });
+		var list = null;
+		var groupsEl = el("div", { class: "stack", style: "gap:16px" });
+		var oftenEl = el("div", { class: "frow" });
+		var printBtn = el("button", { type: "button", class: "btn primary", onclick: function () { window.print(); } });
+		var saveTimer = null;
+
+		var build = function () {
+			list = FridgeShop.buildList({ dinners: s.dinners, recipes: s.recipes, household: s.household, regulars: s.regulars,
+				added: state.added, unticked: state.unticked, sections: s.sections, order: s.order });
+		};
+		var rowsToSave = function () {
+			var rows = [];
+			list.groups.forEach(function (g) { g.items.forEach(function (x) { rows.push({ buy: x.ticked, item: x.name, qty: x.qty, section: x.section, from: x.from }); }); });
+			return rows;
+		};
+		var save = function (now) {
+			clearTimeout(saveTimer);
+			saveTimer = setTimeout(function () {
+				call("shopSave", { week: s.week.start, rows: rowsToSave() }).catch(function (e) { toast("The list wasn't saved: " + e.message); });
+			}, now ? 0 : 900);
+		};
+		var onList = function (key) { return list.groups.some(function (g) { return g.items.some(function (x) { return x.key === key; }); }); };
+		var toggle = function (x) {
+			if (x.ticked) state.unticked.push(x.name);
+			else state.unticked = state.unticked.filter(function (n) { return FridgeShop.itemKey(n) !== x.key; });
+			draw(); save();
+		};
+		var removeAdded = function (x) {
+			state.added = state.added.filter(function (a) { return FridgeShop.itemKey(a.item) !== x.key; });
+			draw(); save();
+			toast(x.name + " taken off");
+		};
+		var addItem = function (item, section) {
+			var key = FridgeShop.itemKey(item);
+			state.unticked = state.unticked.filter(function (n) { return FridgeShop.itemKey(n) !== key; });
+			if (!state.added.some(function (a) { return FridgeShop.itemKey(a.item) === key; })) state.added.push({ item: item, qty: "", section: section });
+			draw(); save();
+			toast(item + " added to " + section);
+		};
+
+		var draw = function () {
+			build();
+			groupsEl.textContent = "";
+			list.groups.forEach(function (g) {
+				if (!g.items.length) return;
+				groupsEl.appendChild(el("section", { class: "stack", style: "gap:6px" },
+					el("h2", null, g.name),
+					el("div", { class: "shopcard" }, g.items.map(function (x) {
+						return el("div", { class: "srow" + (x.ticked ? "" : " off") },
+							el("button", { type: "button", class: "stoggle", "aria-pressed": String(x.ticked), onclick: function () { toggle(x); } },
+								el("span", { class: "sbox", html: x.ticked ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' : "" }),
+								el("span", { class: "stext" }, el("span", { class: "sname" }, x.label), el("span", { class: "sfrom" }, x.from))),
+							x.source === "added" ? el("button", { type: "button", class: "x", "aria-label": "Take " + x.name + " off the list", onclick: function () { removeAdded(x); } }, "×") : null);
+					}))));
+			});
+			if (!list.groups.some(function (g) { return g.items.length; })) {
+				groupsEl.appendChild(el("div", { class: "card stack" },
+					el("b", null, "Nothing on the list yet."),
+					el("span", { class: "muted" }, s.dinners.length ? "" : "No dinners with a recipe are planned for " + s.week.range + ".")));
+			}
+			printBtn.textContent = "";
+			add(printBtn, [icon("print"), "Print " + list.count + " item" + (list.count === 1 ? "" : "s")]);
+			printBtn.disabled = list.count === 0;
+			// Often bought: not already on the list
+			oftenEl.textContent = "";
+			(s.often || []).filter(function (o) { return !onList(FridgeShop.itemKey(o.item)); }).slice(0, 8).forEach(function (o) {
+				oftenEl.appendChild(el("button", { type: "button", class: "toggle", onclick: function () { addItem(o.item, o.section || known[FridgeShop.itemKey(o.item)] || FridgeShop.OTHER); } }, "+ " + o.item));
+			});
+			drawPaper();
+		};
+
+		// the printed page (only shown when printing)
+		var paperEl = el("div", { id: "printsheet" });
+		var drawPaper = function () {
+			var p = FridgeShop.paper(list);
+			paperEl.textContent = "";
+			add(paperEl, [
+				el("div", { class: "phead" }, el("b", null, "Shopping · " + s.today), el("span", null, "for " + s.week.range)),
+				el("div", { class: "pcols", style: "grid-template-columns:repeat(" + Math.max(1, p.columns.length) + ",minmax(0,1fr))" }, p.columns.map(function (c) {
+					return el("div", { class: "pcol" }, el("div", { class: "ptitle" }, c.name), c.lines.map(function (l) { return el("div", { class: "pline" }, l); }));
+				})),
+				p.blocks.map(function (b) {
+					return el("div", { class: "pblock" }, el("div", { class: "ptitle left" }, b.name),
+						el("div", { class: "pgrid" }, b.lines.map(function (l) { return el("div", { class: "pline" }, l); })));
+				})
+			]);
+		};
+		var old = document.getElementById("printsheet");
+		if (old) old.remove();
+		document.body.appendChild(paperEl);
+
+		// adding something
+		var input = el("input", { id: "additem", class: "field", type: "text", maxlength: "80", placeholder: "e.g. birthday candles", autocomplete: "off", enterkeyhint: "done" });
+		var chosen = null;
+		var secRow = el("div", { class: "frow" });
+		var drawSections = function () {
+			secRow.textContent = "";
+			sectionNames.forEach(function (n) {
+				secRow.appendChild(el("button", { type: "button", class: "toggle sec", "aria-pressed": String(chosen === n), onclick: function () { chosen = n; drawSections(); } }, n));
+			});
+		};
+		input.addEventListener("input", function () {
+			var k = known[FridgeShop.itemKey(input.value)];
+			if (k && sectionNames.indexOf(k) !== -1) { chosen = k; drawSections(); }
+		});
+		var addNow = function () {
+			var t = input.value.replace(/\s+/g, " ").trim();
+			if (!t) { input.focus(); return; }
+			if (!chosen) { toast("Which section? Tap one below."); return; }
+			addItem(t.charAt(0).toUpperCase() + t.slice(1), chosen);
+			input.value = "";
+			chosen = null;
+			drawSections();
+		};
+		input.addEventListener("keydown", function (e) { if (e.key === "Enter") addNow(); });
+		drawSections();
+
+		var weekBtn = function (n) {
+			var w = s.weeks[n];
+			return el("button", { type: "button", class: "toggle", "aria-pressed": String(s.offset === n), onclick: function () { if (s.offset !== n) { shopOffset = n; screenShopping(); } } },
+				(n ? "Next week" : "This week") + " · " + w.range);
+		};
+
+		draw();
+		main.textContent = "";
+		add(main, [
+			el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Shopping"), el("span", { class: "small muted" }, s.today)),
+			el("div", { class: "frow" }, weekBtn(0), weekBtn(1)),
+			el("div", { class: "card small" }, "Everything for " + s.week.range + " is ticked to buy. ", el("b", null, "Untick what you already have."),
+				s.dinners.length ? el("div", { class: "muted", style: "margin-top:4px" }, "From " + s.dinners.length + " dinner" + (s.dinners.length === 1 ? "" : "s") + " with a recipe, for " + s.household + ".") : null),
+			groupsEl,
+			el("section", { class: "stack", style: "gap:8px" },
+				el("label", { for: "additem", class: "lab", style: "font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700" }, "Add something"),
+				el("div", { class: "typerow" }, input, el("button", { type: "button", class: "btn primary usebtn", onclick: addNow }, "Add")),
+				el("div", { class: "small muted" }, "Section:"), secRow,
+				s.often && s.often.length ? el("div", { class: "small muted" }, "Often bought:") : null, oftenEl),
+			el("div", { class: "stack savebar" }, printBtn)
+		]);
+		// the Sheet's Shopping list tab follows the list (it may have changed since: new dinners, new regulars)
+		save(true);
+	}).catch(function (e) { showError(main, e, screenShopping); });
 }
 
 /* ---------------- settings ---------------- */

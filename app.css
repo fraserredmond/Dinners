@@ -189,3 +189,31 @@ textarea.field { height: auto; padding: 10px 12px; line-height: 1.4; resize: ver
 .list .x { width: 36px; height: 36px; min-height: 0; padding: 0; border: none; border-radius: 50%; background: var(--panel2); justify-content: center; align-items: center; }
 .list .otherbtn { align-items: center; }
 .night .nd { white-space: nowrap; width: 64px; }
+
+/* shopping list */
+.shopcard { background: var(--panel); border-radius: 16px; padding: 2px 6px; }
+.srow { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--soft); }
+.srow:last-child { border-bottom: none; }
+.stoggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 8px; border: none; background: none; text-align: left; min-height: 52px; }
+.sbox { width: 28px; height: 28px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--beth); border: 2px solid var(--beth); }
+.srow.off .sbox { background: var(--panel); border-color: #8c939d; }
+.stext { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.sname { font-size: 17px; font-weight: 700; }
+.srow.off .sname { font-weight: 400; color: var(--dim); text-decoration: line-through; }
+.sfrom { font-size: 13px; color: var(--muted); }
+.srow .x { margin-right: 6px; }
+.toggle.sec[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: #fff; font-weight: 700; }
+#printsheet { display: none; }
+@media print {
+	body.shopping .shell, body.shopping #toast, body.shopping .overlay { display: none !important; }
+	body.shopping #printsheet { display: block; color: #111; font-size: 12pt; line-height: 1.15; }
+	#printsheet .phead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5mm; }
+	#printsheet .phead b { font-size: 15pt; }
+	#printsheet .phead span { color: #444; }
+	#printsheet .pcols { display: grid; column-gap: 4mm; }
+	#printsheet .ptitle { font-weight: 700; text-align: center; padding-bottom: 1mm; border-bottom: 2px solid #111; }
+	#printsheet .ptitle.left { text-align: left; }
+	#printsheet .pline { min-height: 7mm; border-bottom: 1px solid #9a9a9a; padding: 1.5mm 0 0.5mm; break-inside: avoid; }
+	#printsheet .pblock { margin-top: 6mm; break-inside: avoid; }
+	#printsheet .pgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 4mm; }
+}
