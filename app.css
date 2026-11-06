@@ -140,3 +140,52 @@ textarea.field { height: auto; padding: 10px 12px; line-height: 1.4; resize: ver
 .daygrid button { min-height: 52px; border-radius: 12px; border: none; background: var(--text); color: #fff; font-weight: 700; font-size: 15px; }
 .btn.primary:disabled { opacity: 1; background: #8c939d; border-color: #8c939d; }
 .scard:not(:has(img, .noimg)) .sc { padding-top: 12px; min-height: 76px; }
+/* filters and sort (Recipes list, Plan) */
+.filters { display: flex; flex-direction: column; gap: 10px; }
+.frow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.fbtn { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+.fbtn[aria-expanded="true"] { border-color: var(--text); }
+.caret { font-size: 13px; }
+.fpanel { background: var(--panel); border-radius: 16px; padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+.flabel { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin-top: 2px; }
+.fpanel .toggle { min-height: 40px; padding: 0 12px; }
+.fpanel .toggle[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: #fff; }
+.seg { gap: 6px; }
+.linkbtn { align-self: flex-start; border: none; background: none; padding: 6px 0; color: var(--accenttext); font-weight: 700; text-decoration: underline; }
+.sortsel { min-height: 44px; padding: 0 12px; border-radius: 999px; border: 2px solid var(--line); background: var(--panel); font: inherit; font-size: 15px; color: var(--text); }
+.list .rt { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.list .meta { flex: none; display: flex; align-items: center; gap: 8px; }
+.cam { display: inline-flex; color: var(--dim); }
+/* a dinner that isn't a recipe */
+.list .otherbtn, .otherbtn { flex: none; width: auto; justify-content: center; border-bottom: 2px dashed var(--line); min-height: 36px; padding: 0 12px; border-radius: 999px; border: 2px dashed var(--line); background: var(--panel); font-size: 15px; color: var(--muted); }
+.typerow { display: flex; gap: 8px; }
+.typerow .field { flex: 1; min-width: 0; }
+.btn.usebtn { width: auto; flex: none; min-height: 50px; padding: 0 20px; }
+.sheet .btn + .btn { margin-top: 0; }
+
+/* printing a recipe: just the recipe, black on white */
+@media print {
+	@page { size: A4; margin: 14mm 14mm 16mm; }
+	html, body { background: #fff !important; color: #000; font-size: 11.5pt; }
+	.topbar, nav.tabs, #side, #toast, .back, .btn, .round, .overlay, .cog, .rhead img, .eyebrow { display: none !important; }
+	.layout, #main, .shell { display: block !important; padding: 0 !important; margin: 0 !important; max-width: none !important; width: auto !important; overflow: visible !important; height: auto !important; }
+	#main > * { margin-bottom: 10pt; }
+	h1 { font-size: 20pt !important; margin: 0 0 4pt; }
+	h2 { color: #000 !important; font-size: 11pt; margin: 0 0 4pt; }
+	.chips .chip { border: 1px solid #888; background: #fff !important; color: #000 !important; padding: 1pt 6pt; }
+	.servings { background: none !important; padding: 0 !important; border: none !important; }
+	.servings .small, .servings .count { display: none; }
+	.two { display: flex !important; flex-direction: row !important; gap: 14pt; }
+	.two > :first-child { flex: 0 0 38%; }
+	.two > .method { flex: 1 1 0; }
+	.ings { background: none !important; padding: 0 !important; }
+	.ing { padding: 2pt 0 !important; border-color: #ccc !important; break-inside: avoid; }
+	ol.method li { break-inside: avoid; }
+	ol.method .n { background: #fff !important; color: #000 !important; border: 1px solid #000; }
+	.notes { background: none !important; border: 1px solid #aaa !important; padding: 6pt 8pt !important; }
+	.notes .muted { display: none; }
+}
+/* buttons inside the nights list shouldn't take the list's full-width row style */
+.list .x { width: 36px; height: 36px; min-height: 0; padding: 0; border: none; border-radius: 50%; background: var(--panel2); justify-content: center; align-items: center; }
+.list .otherbtn { align-items: center; }
+.night .nd { white-space: nowrap; width: 64px; }

@@ -46,6 +46,9 @@ var ICONS = {
 	back: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
 	edit: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
 	cog: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+	print: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/></svg>',
+	camera: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>',
+	open: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
 	swap: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg>'
 };
 
@@ -77,8 +80,79 @@ function chips(r, withCarbs) {
 	return el("div", { class: "chips" },
 		r.beth ? el("span", { class: "chip beth" }, badgeText()) : null,
 		r.minutes ? el("span", { class: "chip" }, r.minutes + " min") : null,
+		(r.types || []).map(function (t) { return el("span", { class: "chip" }, TYPE_LABELS[t] || t); }),
 		withCarbs && r.carbsPer100g !== null && r.carbsPer100g !== undefined ? el("span", { class: "chip carbs" }, r.carbsPer100g + "g carbs per 100g") : null);
 }
+/* ---------------- filters (Recipes list and Plan) ---------------- */
+var TYPES = ["chicken", "beef", "pork", "fish", "soup", "vegetarian", "salad"];
+var TYPE_LABELS = { chicken: "Chicken", beef: "Beef", pork: "Pork", fish: "Fish", soup: "Soup", vegetarian: "Vegetarian", salad: "Salad" };
+var TIMES = [0, 20, 30, 45];
+var NO_COOKING = ["Takeaway", "Out", "Leftovers"];
+
+function newFilter() { return { types: [], maxMin: 0, beth: false, noPhoto: false }; }
+
+function matchFilter(r, f) {
+	if (f.types.length && !(r.types || []).some(function (t) { return f.types.indexOf(t) !== -1; })) return false;
+	if (f.maxMin && !(r.minutes && r.minutes <= f.maxMin)) return false;
+	if (f.beth && !r.beth) return false;
+	if (f.noPhoto && r.hasPhoto) return false;
+	return true;
+}
+
+function filterCount(f) { return f.types.length + (f.maxMin ? 1 : 0) + (f.noPhoto ? 1 : 0); }
+
+/**
+ * The filter bar: "Filters" (opens types and time), the badge-only toggle and, on the
+ * Recipes list, "No photo". items: the recipes, to show only types that are in use.
+ * extra: more controls for the first row (the sort). onChange runs after every tap.
+ */
+function filterBar(f, items, opts, onChange) {
+	var open = filterCount(f) > 0 && opts.startOpen;
+	var wrap = el("div", { class: "filters" });
+	var draw = function () {
+		wrap.textContent = "";
+		var n = filterCount(f);
+		var toggle = function (label, on, fn, cls) {
+			return el("button", { type: "button", class: "toggle" + (cls ? " " + cls : ""), "aria-pressed": String(on), onclick: function () { fn(); draw(); onChange(); } }, label);
+		};
+		var row = el("div", { class: "frow" },
+			el("button", { type: "button", class: "toggle fbtn", "aria-expanded": String(open), onclick: function () { open = !open; draw(); } },
+				"Filters" + (n ? " (" + n + ")" : ""), el("span", { class: "caret", "aria-hidden": "true" }, open ? "\u25b4" : "\u25be")),
+			toggle(badgeText(" only"), f.beth, function () { f.beth = !f.beth; }, "beth"),
+			opts.extra || null);
+		wrap.appendChild(row);
+		if (!open) return;
+		var used = TYPES.filter(function (t) { return items.some(function (r) { return (r.types || []).indexOf(t) !== -1; }); });
+		var panel = el("div", { class: "fpanel" },
+			el("div", { class: "flabel" }, "Type"),
+			el("div", { class: "frow" }, used.length ? used.map(function (t) {
+				var on = f.types.indexOf(t) !== -1;
+				return toggle(TYPE_LABELS[t], on, function () { if (on) f.types.splice(f.types.indexOf(t), 1); else f.types.push(t); });
+			}) : el("span", { class: "small muted" }, "No recipe has a Type yet: add it on the Recipes tab.")),
+			el("div", { class: "flabel" }, "Time"),
+			el("div", { class: "frow seg" }, TIMES.map(function (m) {
+				return toggle(m ? "\u2264 " + m + " min" : "Any time", f.maxMin === m, function () { f.maxMin = m; });
+			})),
+			opts.noPhoto ? el("div", { class: "frow" }, toggle("No photo yet", f.noPhoto, function () { f.noPhoto = !f.noPhoto; })) : null,
+			n ? el("button", { type: "button", class: "linkbtn", onclick: function () { f.types = []; f.maxMin = 0; f.noPhoto = false; draw(); onChange(); } }, "Clear filters") : null);
+		wrap.appendChild(panel);
+	};
+	draw();
+	return wrap;
+}
+
+/** A box for a dinner that isn't a recipe: the quick ones, or type anything. */
+function otherDinner(quick, onPick) {
+	var input = el("input", { class: "field", type: "text", maxlength: "60", placeholder: "Type anything, e.g. Burgers", "aria-label": "Something else", enterkeyhint: "done", autocomplete: "off" });
+	var use = el("button", { type: "button", class: "btn primary usebtn" }, "Use");
+	var go1 = function () { var t = input.value.replace(/\s+/g, " ").trim(); if (t) onPick(t, false); else input.focus(); };
+	use.addEventListener("click", go1);
+	input.addEventListener("keydown", function (e) { if (e.key === "Enter") go1(); });
+	return el("div", { class: "stack", style: "gap:10px" },
+		el("div", { class: "grid3" }, quick.map(function (n) { return el("button", { type: "button", onclick: function () { onPick(n, true); } }, n); })),
+		el("div", { class: "typerow" }, input, use));
+}
+
 var toastTimer;
 function toast(text) {
 	var t = document.getElementById("toast");
@@ -103,7 +177,7 @@ var wide = window.matchMedia("(min-width: 1000px)");
 var main = document.getElementById("main");
 var side = document.getElementById("side");
 var current = { name: "week", args: {} };
-var cache = { week: null };
+var cache = { week: null, plan: null };
 
 var stack = [];
 function hashFor(name, args) {
@@ -149,6 +223,7 @@ function renderNav() {
 function show() {
 	renderNav();
 	main.classList.toggle("plain", false);
+	main.style.opacity = ""; // a save dims the screen while it works
 	window.scrollTo(0, 0);
 	var a = current.args;
 	if (wide.matches) renderSide();
@@ -165,6 +240,22 @@ function show() {
 wide.addEventListener("change", show);
 
 /* ---------------- This week ---------------- */
+var PLAN_FRESH_MS = 5 * 60 * 1000;
+
+/**
+ * Next week's plan options. The Week screen asks for them in the background (the Sheet takes
+ * a few seconds to work them out), so Plan usually opens at once. Kept for 5 minutes, and
+ * dropped whenever a dinner changes.
+ */
+function loadPlan(prefetch) {
+	if (cache.plan && Date.now() - cache.plan.at < PLAN_FRESH_MS) return cache.plan.promise;
+	if (prefetch && !navigator.onLine) return null;
+	var entry = { at: Date.now(), promise: call("planOptions", { exclude: [] }) };
+	entry.promise.catch(function () { if (cache.plan === entry) cache.plan = null; });
+	cache.plan = entry;
+	return entry.promise;
+}
+
 function loadWeek(force) {
 	if (cache.week && !force) return Promise.resolve(cache.week);
 	return call("week", { offset: 0 }).then(function (w) { cache.week = w; return w; });
@@ -202,6 +293,8 @@ function screenWeek() {
 	loading(main);
 	loadWeek(true).then(function (w) {
 		if (current.name !== "week") return;
+		var pre = loadPlan(true);
+		if (pre) pre.catch(function () { /* Plan will ask again and show the error there */ });
 		if (wide.matches) {
 			renderSide();
 			var t = w.days.filter(function (d) { return d.isToday; })[0];
@@ -275,6 +368,7 @@ function screenRecipe(id, dayKey, inWeek) {
 				r.lastHad ? el("div", { class: "small muted" }, r.lastHad) : null) : null,
 			el("div", { class: "stack" },
 				el("button", { type: "button", class: "btn", onclick: function () { go("edit", { id: r.id, day: day ? day.key : "" }); } }, icon("edit"), "Edit time, notes or photo"),
+				el("button", { type: "button", class: "btn", onclick: function () { window.print(); } }, icon("print"), "Print"),
 				day && (day.isToday || day.key > todayKey()) ? el("button", { type: "button", class: "btn primary", onclick: function () { go("swap", { day: day.key }); } }, icon("swap"), "Swap " + day.label + "'s dinner") : null)
 		]);
 	}).catch(function (e) { showError(main, e, function () { screenRecipe(id, dayKey, inWeek); }); });
@@ -379,7 +473,7 @@ function screenSwap(dayKey) {
 			busy = true;
 			main.style.opacity = "0.6";
 			p.then(function () {
-				cache.week = null;
+				cache.week = null; cache.plan = null;
 				toast(msg);
 				go("week", {}, true);
 			}).catch(function (e) {
@@ -407,10 +501,10 @@ function screenSwap(dayKey) {
 			o.suggestions.length ? el("section", { class: "stack" }, el("h2", null, "Suggestions"),
 				o.suggestions.map(function (r) { return pickCard(r, (r.minutes ? r.minutes + " min \u00b7 " : "") + r.why, put(r)); })) : null,
 			el("section", { class: "stack" }, el("label", { for: "find", class: "lab", style: "font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)" }, "Or find a recipe"), search, results),
-			el("section", { class: "stack" }, el("h2", null, "No cooking"),
-				el("div", { class: "grid3" }, o.noCooking.map(function (n) {
-					return el("button", { type: "button", onclick: function () { done(call("setDinner", { day: dayKey, choice: { noCooking: n } }), n + " on " + o.day.label); } }, n);
-				}))),
+			el("section", { class: "stack" }, el("h2", null, "Something else"),
+				otherDinner(o.noCooking || NO_COOKING, function (t, quick) {
+					done(call("setDinner", { day: dayKey, choice: quick ? { noCooking: t } : { text: t } }), t + " on " + o.day.label);
+				})),
 			el("section", { class: "stack" }, el("h2", null, "Swap with another day"),
 				el("div", { class: "list" }, o.others.filter(function (x) { return !x.isPast; }).map(function (x) {
 					return el("button", { type: "button", onclick: function () { done(call("swapDays", { dayA: dayKey, dayB: x.key }), "Swapped " + o.day.label + " and " + x.label); } },
@@ -441,14 +535,42 @@ function saveDraft(weekStart, draft) {
 	} catch (e) { /* private window: the plan just isn't kept */ }
 }
 
+var planFilter = newFilter(); // kept while the app is open
+
+/** Weighted picks from the plan pool (same steps as drawShortlist_ in App.gs). */
+function drawPool(pool, size, share, skip) {
+	var items = pool.filter(function (x) { return !skip[x.id]; });
+	var take = function (list, key, n) {
+		var out = [], left = list.slice();
+		while (out.length < n && left.length) {
+			var total = left.reduce(function (t, x) { return t + x[key]; }, 0);
+			var pick = Math.random() * total;
+			var i = 0;
+			while (i < left.length - 1 && pick >= left[i][key]) { pick -= left[i][key]; i++; }
+			out.push(left.splice(i, 1)[0]);
+		}
+		return out;
+	};
+	var favs = take(items, "fw", Math.round(size * share / 100));
+	var rest = items.filter(function (x) { return favs.indexOf(x) === -1; });
+	var surprises = take(rest, "sw", size - favs.length);
+	var card = function (kind) { return function (x) { var c = Object.assign({}, x, { kind: kind }); if (kind === "surprise") c.why = x.whySurprise; delete c.fw; delete c.sw; delete c.whySurprise; return c; }; };
+	return favs.map(card("favourite")).concat(surprises.map(card("surprise")));
+}
+
 function screenPlan() {
+	var ready = cache.plan && Date.now() - cache.plan.at < PLAN_FRESH_MS;
 	loading(main);
-	call("planOptions", { exclude: [] }).then(function (o) {
+	if (!ready) main.querySelector(".loading").textContent = "Finding suggestions…";
+	loadPlan(false).then(function (o) {
+		if (!o.pool) throw new Error("The Sheet's script needs updating: paste the new App.gs and deploy a new version.");
 		var start = o.week.start;
 		var draft = loadDraft(start) || {};
-		var picks = draft.picks || {}; // day key -> { id, title, beth, minutes }
-		var shown = draft.shown && draft.shown.length ? draft.shown : o.suggestions;
-		var bethOnly = false;
+		var picks = draft.picks || {}; // day key -> { id, title, beth, minutes } or { text: "Burgers" }
+		var f = planFilter;
+		var pool = o.pool.map(function (x) { x.hasPhoto = Boolean(x.photo || x.sheetPhoto); return x; });
+		var fits = function () { return pool.filter(function (x) { return matchFilter(x, f); }); };
+		var shown = draft.shown && draft.shown.length ? draft.shown : drawPool(fits(), o.size, o.share, {});
 		var photos = {}; // id -> data URL, for photos kept in the Sheet
 		// nights that already have a dinner in the calendar can't be picked over
 		o.days.forEach(function (d) { if (d.dinner) delete picks[d.key]; });
@@ -459,7 +581,6 @@ function screenPlan() {
 		var count = el("span", { class: "small muted" });
 		var saveBtn = el("button", { type: "button", class: "btn primary" }, "Save the week");
 		var moreBtn = el("button", { type: "button", class: "btn" }, "Show more suggestions");
-		var bethBtn = el("button", { type: "button", class: "toggle", "aria-pressed": "false" }, badgeText(" only"));
 
 		var pickedDay = function (id) {
 			for (var k in picks) if (picks[k].id === id) return k;
@@ -474,17 +595,18 @@ function screenPlan() {
 				if (d.dinner || p) planned++;
 				nights.appendChild(el("div", { class: "night" + (d.dinner ? " fixed" : p ? " picked" : " free") },
 					el("b", { class: "nd" }, d.label),
-					el("span", { class: "nt" }, d.dinner ? d.dinner.title : p ? p.title : "Pick from below"),
+					el("span", { class: "nt" }, d.dinner ? d.dinner.title : p ? p.title || p.text : "Pick from below"),
 					d.dinner ? el("span", { class: "small muted" }, "in calendar")
-						: p ? el("button", { type: "button", class: "x", "aria-label": "Remove from " + d.dayName, onclick: function () { delete picks[d.key]; keep(); draw(); } }, "×") : null));
+						: p ? el("button", { type: "button", class: "x", "aria-label": "Remove from " + d.dayName, onclick: function () { delete picks[d.key]; keep(); draw(); } }, "×")
+						: el("button", { type: "button", class: "otherbtn", "aria-label": "Something else on " + d.dayName, onclick: function () { other(d); } }, "Other\u2026")));
 			});
 			count.textContent = planned + " of 7 nights planned";
 			var newPicks = Object.keys(picks).length;
 			saveBtn.disabled = newPicks === 0;
 			saveBtn.textContent = newPicks ? "Save the week (" + newPicks + " new)" : "Save the week";
 			cards.textContent = "";
-			var list = shown.filter(function (r) { return !bethOnly || r.beth; });
-			if (!list.length) cards.appendChild(el("div", { class: "small muted" }, bethOnly ? "No " + badgeText("") + " recipes in these suggestions. Try Show more." : "No suggestions: everything was had recently."));
+			var list = shown.filter(function (r) { return pickedDay(r.id) || matchFilter(r, f); });
+			if (!list.length) cards.appendChild(el("div", { class: "small muted" }, filterCount(f) || f.beth ? "No recipes fit these filters." : "No suggestions: everything was had recently."));
 			list.forEach(function (r) {
 				var on = pickedDay(r.id);
 				var img = r.photo || photos[r.id];
@@ -503,6 +625,25 @@ function screenPlan() {
 			});
 		};
 
+		var sheet = function (title, body) {
+			var overlay;
+			var close = function () { overlay.remove(); };
+			overlay = el("div", { class: "overlay", onclick: function (e) { if (e.target === overlay) close(); } },
+				el("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
+					el("div", { class: "row" }, el("h2", { style: "color:var(--text);font-size:20px;letter-spacing:0;text-transform:none" }, title),
+						el("button", { type: "button", class: "x", "aria-label": "Close", onclick: close }, "×")),
+					body(close)));
+			document.body.appendChild(overlay);
+			return overlay;
+		};
+		var other = function (d) {
+			var ov = sheet(d.dayName + ": something else", function (close) {
+				return otherDinner(NO_COOKING, function (t) { picks[d.key] = { text: t }; keep(); draw(); close(); toast(t + " on " + d.dayName); });
+			});
+			var inp = ov.querySelector("input");
+			if (inp && !("ontouchstart" in window)) inp.focus();
+		};
+
 		var popup = function (r) {
 			var free = o.days.filter(function (d) { return !d.dinner && !picks[d.key]; });
 			var on = pickedDay(r.id);
@@ -518,7 +659,8 @@ function screenPlan() {
 						on ? el("button", { type: "button", class: "btn", onclick: function () { delete picks[on]; keep(); draw(); close(); } }, "Take it off " + dayOf(on).dayName)
 							: free.length ? el("div", { class: "daygrid" }, free.map(function (d) {
 								return el("button", { type: "button", onclick: function () { picks[d.key] = { id: r.id, title: r.title, beth: r.beth, minutes: r.minutes }; keep(); draw(); close(); toast(r.title + " on " + d.dayName); } }, d.label);
-							})) : el("div", { class: "small muted" }, "Every night is planned. Remove one with × to make room."))));
+							})) : el("div", { class: "small muted" }, "Every night is planned. Remove one with × to make room.")),
+					el("button", { type: "button", class: "btn", onclick: function () { close(); go("recipe", { id: r.id }); } }, icon("open"), "Open the full recipe")));
 			document.body.appendChild(overlay);
 			call("recipe", { id: r.id }).then(function (full) {
 				body.textContent = "";
@@ -533,26 +675,28 @@ function screenPlan() {
 			}).catch(function (e) { body.textContent = e.message; });
 		};
 
-		moreBtn.addEventListener("click", function () {
-			moreBtn.disabled = true;
-			var keepIds = Object.keys(picks).map(function (k) { return picks[k].id; });
-			var seen = shown.map(function (r) { return r.id; });
-			call("planOptions", { exclude: seen.concat(keepIds) }).then(function (res) {
-				var kept = shown.filter(function (r) { return pickedDay(r.id); });
-				if (!res.suggestions.length) { toast("That's every recipe that fits. Showing the first ones again."); res = o; }
-				shown = kept.concat(res.suggestions.filter(function (r) { return !pickedDay(r.id); }));
-				keep(); draw(); fetchPhotos();
-				window.scrollTo(0, cards.offsetTop - 80);
-			}).catch(function (e) { toast(e.message); }).finally(function () { moreBtn.disabled = false; });
-		});
-		bethBtn.addEventListener("click", function () { bethOnly = !bethOnly; bethBtn.setAttribute("aria-pressed", String(bethOnly)); draw(); });
+		var redraw = function (skipSeen) {
+			var kept = shown.filter(function (r) { return pickedDay(r.id); });
+			var skip = {};
+			kept.forEach(function (r) { skip[r.id] = true; });
+			if (skipSeen) shown.forEach(function (r) { skip[r.id] = true; });
+			var fresh = drawPool(fits(), o.size, o.share, skip);
+			if (skipSeen && !fresh.length) {
+				toast("That's every recipe that fits. Showing the first ones again.");
+				fresh = drawPool(fits(), o.size, o.share, kept.reduce(function (m, r) { m[r.id] = true; return m; }, {}));
+			}
+			shown = kept.concat(fresh);
+			keep(); draw(); fetchPhotos();
+		};
+		moreBtn.addEventListener("click", function () { redraw(true); window.scrollTo(0, cards.offsetTop - 80); });
+		var bar = filterBar(f, pool, { startOpen: true }, function () { redraw(false); });
 		saveBtn.addEventListener("click", function () {
-			var list = Object.keys(picks).map(function (k) { return { day: k, recipeId: picks[k].id }; });
+			var list = Object.keys(picks).map(function (k) { return picks[k].id ? { day: k, recipeId: picks[k].id } : { day: k, text: picks[k].text }; });
 			saveBtn.disabled = true;
 			saveBtn.textContent = "Saving…";
 			call("savePlan", { picks: list }).then(function (res) {
 				saveDraft(start, null);
-				cache.week = null;
+				cache.week = null; cache.plan = null;
 				toast(res.saved.length + " dinner" + (res.saved.length === 1 ? "" : "s") + " saved" + (res.skipped.length ? ". " + res.skipped.length + " night" + (res.skipped.length === 1 ? " was" : "s were") + " already taken" : ""));
 				go("plan", {}, true);
 			}).catch(function (e) { toast(e.message); draw(); });
@@ -567,7 +711,7 @@ function screenPlan() {
 			el("section", { class: "stack" }, el("div", { class: "row" }, el("h2", null, "The week"), count), nights),
 			el("section", { class: "stack" },
 				el("div", { class: "row" }, el("h2", null, "Suggestions"), el("span", { class: "small muted" }, "Tap one to see it")),
-				el("div", null, bethBtn),
+				bar,
 				cards, moreBtn),
 			el("div", { class: "stack savebar" }, saveBtn,
 				el("div", { class: "small muted", style: "text-align:center" }, "Empty nights stay empty. Saving puts the dinners in the calendar, and on the fridge."))
@@ -576,33 +720,60 @@ function screenPlan() {
 }
 
 /* ---------------- all recipes ---------------- */
+var listState = { filter: newFilter(), sort: "az", q: "" }; // kept while the app is open
+
+function shortKey(k) {
+	var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(k || "");
+	return m ? Number(m[3]) + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(m[2]) - 1] : "";
+}
+
 function screenRecipes() {
 	loading(main);
 	call("recipes").then(function (res) {
-		var bethOnly = false;
+		var f = listState.filter;
 		var list = el("div", { class: "list" });
-		var search = el("input", { id: "rsearch", class: "field", type: "search", placeholder: "Search recipes", autocomplete: "off" });
-		var bethBtn = el("button", { type: "button", class: "toggle", "aria-pressed": "false" }, badgeText(" only"));
+		var shown = el("span", { class: "small muted" });
+		var search = el("input", { id: "rsearch", class: "field", type: "search", placeholder: "Search recipes", autocomplete: "off", value: listState.q });
+		var sort = el("select", { class: "sortsel", "aria-label": "Sort" },
+			el("option", { value: "az" }, "A\u2013Z"),
+			el("option", { value: "most", disabled: res.counted ? null : "" }, "Most often"),
+			el("option", { value: "least", disabled: res.counted ? null : "" }, "Least often"));
+		if (!res.counted && listState.sort !== "az") listState.sort = "az";
+		sort.value = listState.sort;
 		var draw = function () {
 			var q = search.value.trim().toLowerCase();
-			var rows = res.recipes.filter(function (r) { return (!bethOnly || r.beth) && (!q || r.title.toLowerCase().indexOf(q) !== -1); });
+			listState.q = search.value;
+			var rows = res.recipes.filter(function (r) { return matchFilter(r, f) && (!q || r.title.toLowerCase().indexOf(q) !== -1); });
+			var bySort = listState.sort;
+			if (bySort !== "az") rows = rows.slice().sort(function (a, b) {
+				var d = bySort === "most" ? b.count - a.count : a.count - b.count;
+				return d || (bySort === "least" ? String(a.last || "").localeCompare(String(b.last || "")) : 0) || a.title.localeCompare(b.title);
+			});
+			shown.textContent = rows.length === res.recipes.length ? res.recipes.length + " in the Sheet" : rows.length + " of " + res.recipes.length;
 			list.textContent = "";
 			if (!rows.length) list.appendChild(el("div", { class: "small muted", style: "padding:14px 0" }, "No recipes match."));
 			rows.forEach(function (r) {
+				var freq = bySort === "az" ? null : r.count ? r.count + "\u00d7 in 6 months \u00b7 last " + shortKey(r.last) : "Not had in 6 months";
 				list.appendChild(el("button", { type: "button", onclick: function () { go("recipe", { id: r.id }); } },
-					el("span", { style: "font-weight:700" }, r.title),
-					el("span", { class: "small muted", style: "flex:none" }, r.beth ? el("b", { style: "color:var(--beth)" }, badgeText("  ")) : null, r.minutes ? r.minutes + " min" : "")));
+					el("span", { class: "rt" },
+						el("span", { style: "font-weight:700" }, r.title),
+						freq ? el("span", { class: "small muted" }, freq) : null),
+					el("span", { class: "small muted meta" },
+						r.hasPhoto ? el("span", { class: "cam", title: "Has a photo", "aria-label": "Has a photo", role: "img", html: ICONS.camera }) : null,
+						r.beth ? el("b", { style: "color:var(--beth)" }, badgeText("")) : null,
+						r.minutes ? el("span", null, r.minutes + " min") : null)));
 			});
 		};
 		search.addEventListener("input", draw);
-		bethBtn.addEventListener("click", function () { bethOnly = !bethOnly; bethBtn.setAttribute("aria-pressed", String(bethOnly)); draw(); });
+		sort.addEventListener("change", function () { listState.sort = sort.value; draw(); });
+		var bar = filterBar(f, res.recipes, { noPhoto: true, extra: sort, startOpen: true }, draw);
 		draw();
 		main.textContent = "";
 		add(main, [
-			el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Recipes"), el("span", { class: "small muted" }, res.recipes.length + " in the Sheet")),
+			el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Recipes"), shown),
 			el("label", { for: "rsearch", class: "hidden" }, "Search recipes"),
 			search,
-			el("div", null, bethBtn),
+			bar,
 			list
 		]);
 	}).catch(function (e) { showError(main, e, screenRecipes); });
@@ -633,7 +804,7 @@ function screenSettings(first) {
 		status.textContent = "Testing\u2026";
 		call("ping").then(function () {
 			status.textContent = "Connected.";
-			cache.week = null;
+			cache.week = null; cache.plan = null;
 			toast("Connected to the Sheet");
 			go("week", {}, true);
 		}).catch(function (e) { status.textContent = e.message; });
@@ -676,7 +847,7 @@ function parseHash(hash) {
 }
 // a setup link opened while the app is already open in this tab
 window.addEventListener("hashchange", function () {
-	if (/[#&]setup=/.test(location.hash) && takeSetupLink()) { cache.week = null; go("week", {}, true); }
+	if (/[#&]setup=/.test(location.hash) && takeSetupLink()) { cache.week = null; cache.plan = null; go("week", {}, true); }
 });
 takeSetupLink();
 var first = parseHash(location.hash);
