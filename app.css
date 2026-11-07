@@ -205,15 +205,23 @@ textarea.field { height: auto; padding: 10px 12px; line-height: 1.4; resize: ver
 .toggle.sec[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: #fff; font-weight: 700; }
 #printsheet { display: none; }
 @media print {
+	@page shoplist { size: A4; margin: 5mm; }
 	body.shopping .shell, body.shopping #toast, body.shopping .overlay { display: none !important; }
-	body.shopping #printsheet { display: block; color: #111; font-size: 12pt; line-height: 1.15; }
-	#printsheet .phead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5mm; }
-	#printsheet .phead b { font-size: 15pt; }
-	#printsheet .phead span { color: #444; }
-	#printsheet .pcols { display: grid; column-gap: 4mm; }
-	#printsheet .ptitle { font-weight: 700; text-align: center; padding-bottom: 1mm; border-bottom: 2px solid #111; }
+	body.shopping #printsheet { display: block; page: shoplist; color: #000; font-size: 9pt; line-height: 1.2; }
+	#printsheet .phead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3mm; }
+	#printsheet .phead b { font-size: 12pt; }
+	#printsheet .phead span { color: #333; }
+	#printsheet .pcols { display: grid; column-gap: 3mm; align-items: stretch; }
+	#printsheet .pcol { display: flex; flex-direction: column; min-width: 0; }
+	/* fills a shorter column with blank lines down to the bottom of the longest, adding no height itself */
+	#printsheet .pfill { flex: 1 1 0; min-height: 0; overflow: hidden; }
+	#printsheet .ptitle { font-weight: 700; text-align: center; padding-bottom: 1mm; border-bottom: 1.5pt solid #000; }
 	#printsheet .ptitle.left { text-align: left; }
-	#printsheet .pline { min-height: 7mm; border-bottom: 1px solid #9a9a9a; padding: 1.5mm 0 0.5mm; break-inside: avoid; }
-	#printsheet .pblock { margin-top: 6mm; break-inside: avoid; }
-	#printsheet .pgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 4mm; }
+	#printsheet .pline { min-height: 6.5mm; border-bottom: 0.75pt solid #777; break-inside: avoid; }
+	/* written lines: no rule, just the item; blank lines keep theirs for writing on */
+	#printsheet .pline.filled { min-height: 0; border-bottom: none; padding: 1.2mm 0 0.3mm; }
+	#printsheet .pline.gap { margin-top: 2mm; }
+	#printsheet .pblock { margin-top: 5mm; break-inside: avoid; }
+	#printsheet .pgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 3mm; }
+}
 }

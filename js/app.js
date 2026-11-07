@@ -803,7 +803,7 @@ function screenShopping() {
 	document.body.classList.add("shopping");
 	call("shopping", { offset: shopOffset }).then(function (s) {
 		if (current.name !== "shopping") return;
-		var state = { unticked: s.saved.unticked.slice(), added: s.saved.added.slice() };
+		var state = { unticked: s.saved.unticked.slice(), ticked: (s.saved.ticked || []).slice(), added: s.saved.added.slice() };
 		var known = {};
 		(s.known || []).forEach(function (k) { known[FridgeShop.itemKey(k[0])] = k[1]; });
 		var sectionNames = s.sections.map(function (x) { return x.name; });
@@ -815,7 +815,7 @@ function screenShopping() {
 
 		var build = function () {
 			list = FridgeShop.buildList({ dinners: s.dinners, recipes: s.recipes, household: s.household, regulars: s.regulars,
-				added: state.added, unticked: state.unticked, sections: s.sections, order: s.order });
+				added: state.added, unticked: state.unticked, ticked: state.ticked, sections: s.sections, order: s.order });
 		};
 		var rowsToSave = function () {
 			var rows = [];
@@ -830,8 +830,11 @@ function screenShopping() {
 		};
 		var onList = function (key) { return list.groups.some(function (g) { return g.items.some(function (x) { return x.key === key; }); }); };
 		var toggle = function (x) {
+			var other = function (n) { return FridgeShop.itemKey(n) !== x.key; };
+			state.unticked = state.unticked.filter(other);
+			state.ticked = state.ticked.filter(other);
 			if (x.ticked) state.unticked.push(x.name);
-			else state.unticked = state.unticked.filter(function (n) { return FridgeShop.itemKey(n) !== x.key; });
+			else state.ticked.push(x.name);
 			draw(); save();
 		};
 		var removeAdded = function (x) {
@@ -842,6 +845,7 @@ function screenShopping() {
 		var addItem = function (item, section) {
 			var key = FridgeShop.itemKey(item);
 			state.unticked = state.unticked.filter(function (n) { return FridgeShop.itemKey(n) !== key; });
+			if (state.ticked.every(function (n) { return FridgeShop.itemKey(n) !== key; })) state.ticked.push(item);
 			if (!state.added.some(function (a) { return FridgeShop.itemKey(a.item) === key; })) state.added.push({ item: item, qty: "", section: section });
 			draw(); save();
 			toast(item + " added to " + section);
@@ -858,7 +862,7 @@ function screenShopping() {
 						return el("div", { class: "srow" + (x.ticked ? "" : " off") },
 							el("button", { type: "button", class: "stoggle", "aria-pressed": String(x.ticked), onclick: function () { toggle(x); } },
 								el("span", { class: "sbox", html: x.ticked ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' : "" }),
-								el("span", { class: "stext" }, el("span", { class: "sname" }, x.label), el("span", { class: "sfrom" }, x.from))),
+								el("span", { class: "stext" }, el("span", { class: "sname" }, x.label), el("span", { class: "sfrom" }, (x.check ? "Check the cupboard \u00b7 " : "") + x.from))),
 							x.source === "added" ? el("button", { type: "button", class: "x", "aria-label": "Take " + x.name + " off the list", onclick: function () { removeAdded(x); } }, "×") : null);
 					}))));
 			});
@@ -886,11 +890,15 @@ function screenShopping() {
 			add(paperEl, [
 				el("div", { class: "phead" }, el("b", null, "Shopping · " + s.today), el("span", null, "for " + s.week.range)),
 				el("div", { class: "pcols", style: "grid-template-columns:repeat(" + Math.max(1, p.columns.length) + ",minmax(0,1fr))" }, p.columns.map(function (c) {
-					return el("div", { class: "pcol" }, el("div", { class: "ptitle" }, c.name), c.lines.map(function (l) { return el("div", { class: "pline" }, l); }));
+					var fill = el("div", { class: "pfill" });
+					for (var i = 0; i < 40; i++) fill.appendChild(el("div", { class: "pline" }, ""));
+					return el("div", { class: "pcol" }, el("div", { class: "ptitle" }, c.name), c.lines.map(function (l) {
+						return el("div", { class: "pline" + (l.text ? " filled" : "") + (l.gap ? " gap" : "") }, l.text);
+					}), fill);
 				})),
 				p.blocks.map(function (b) {
 					return el("div", { class: "pblock" }, el("div", { class: "ptitle left" }, b.name),
-						el("div", { class: "pgrid" }, b.lines.map(function (l) { return el("div", { class: "pline" }, l); })));
+						el("div", { class: "pgrid" }, b.lines.map(function (l) { return el("div", { class: "pline" + (l.text ? " filled" : "") }, l.text); })));
 				})
 			]);
 		};

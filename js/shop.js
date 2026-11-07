@@ -33,6 +33,38 @@
 		return Scale.formatQty(q) + " " + unit + plural;
 	}
 
+	/** "x3", "3", "×3" -> 3; anything else -> null */
+	function countOf(text) {
+		const m = /^\s*[x×]?\s*(\d+)\s*[x×]?\s*$/i.exec(String(text || ""));
+		return m ? Number(m[1]) : null;
+	}
+
+	/**
+	 * How an item reads on the list, like a handwritten one: counts as "×3" (nothing for 1),
+	 * whole tins and cartons as a count too, weights and spoons in brackets.
+	 */
+	function labelOf(name, parts, extra) {
+		let out = name;
+		if (parts.length === 1 && WHOLE.indexOf(parts[0].u) !== -1) {
+			if (parts[0].q > 1) out += " \u00d7" + Scale.formatQty(parts[0].q);
+		} else if (parts.length) {
+			out += " (" + parts.map(function (p) { return amountText(p.q, p.u); }).join(" + ") + ")";
+		}
+		if (extra) {
+			const n = countOf(extra);
+			if (n === null) out += " (" + extra + ")";
+			else if (n > 1) out += " \u00d7" + n;
+		}
+		return out;
+	}
+
+	/** Only a spoonful or a few grams: probably in the cupboard already. */
+	function smallAmount(parts) {
+		return parts.length > 0 && parts.every(function (p) {
+			return ["tsp", "tbsp", "pinch"].indexOf(p.u) !== -1 || ((p.u === "g" || p.u === "ml") && p.q <= 30);
+		});
+	}
+
 	/** The shortest name for a recipe: "Ribollita" rather than "Tuscan Ribollita Inspired Soup". */
 	function shortName(r) {
 		return [r.title].concat(r.aliases || []).filter(Boolean)
@@ -132,8 +164,9 @@
 			if (line.from.indexOf("Added") === -1) line.from.push("Added");
 		});
 
-		const unticked = {};
+		const unticked = {}, ticked = {};
 		(input.unticked || []).forEach(function (k) { unticked[itemKey(k)] = true; });
+		(input.ticked || []).forEach(function (k) { ticked[itemKey(k)] = true; });
 		const rules = orderRules(input.order);
 		const sections = (input.sections || []).slice().sort(function (a, b) { return (Number(a.order) || 999) - (Number(b.order) || 999); });
 		const known = {};
@@ -149,24 +182,29 @@
 			const parts = units.sort().map(function (u) {
 				let q = line.totals[u];
 				if (WHOLE.indexOf(u) !== -1) q = Math.ceil(q - 1e-9);
-				return amountText(q, u);
+				return { q: q, u: u };
 			});
 			const many = units.length !== 1 || units[0] !== "" || line.totals[""] > 1;
 			const plural = line.names.filter(function (n) { return /s$/i.test(n); })[0];
 			let name = line.names[0] || key;
 			if (!many) name = Scale.singular(name);
 			else if (plural && line.source === "dinner") name = plural;
-			const qty = parts.length ? parts.join(" + ") : line.extra || "";
+			const label = labelOf(capital(name), parts, line.extra);
+			// a spoonful of soy sauce: on the list to check, but not ticked unless you tick it
+			const check = line.source === "dinner" && !line.alsoAdded && smallAmount(parts);
+			const place = placeOf(key, section, rules);
 			return {
 				key: key,
 				name: capital(name),
-				qty: line.extra && parts.length ? qty + ", " + line.extra : qty,
-				label: capital(name) + (qty ? " (" + (line.extra && parts.length ? qty + ", " + line.extra : qty) + ")" : ""),
+				qty: label.slice(capital(name).length).replace(/^ \(|\)$/g, "").trim(),
+				label: label,
 				section: section,
 				from: line.from.join(", "),
 				source: line.source,
-				ticked: !unticked[key],
-				place: placeOf(key, section, rules)
+				check: check,
+				ticked: check ? Boolean(ticked[key]) : !unticked[key],
+				group: place[0] + ":" + place[1],
+				place: place
 			};
 		});
 
@@ -199,19 +237,29 @@
 	}
 
 	/**
-	 * The printed page: aisle columns (each as long as the longest, plus 2 blank lines),
-	 * then each block (Bread, Tesco) across the page in 4 columns. Only ticked items.
+	 * The printed page: aisle columns, then each block (Bread, Tesco) across the page in 4
+	 * columns. Only ticked items. A line is { text, gap } (gap: a new Shop order group starts);
+	 * every column ends with 2 blank lines, and the page fills shorter columns with more
+	 * blank lines down to the bottom of the longest.
 	 */
 	function paper(list) {
-		const ticked = function (g) { return g.items.filter(function (x) { return x.ticked; }).map(function (x) { return x.label; }); };
-		const columns = list.groups.filter(function (g) { return !g.block; }).map(function (g) { return { name: g.name, lines: ticked(g) }; });
-		const rows = Math.max(0, Math.max.apply(null, columns.map(function (c) { return c.lines.length; }).concat([0]))) + 2;
-		columns.forEach(function (c) { while (c.lines.length < rows) c.lines.push(""); });
+		const ticked = function (g) {
+			let last = null;
+			return g.items.filter(function (x) { return x.ticked; }).map(function (x, i) {
+				const line = { text: x.label, gap: i > 0 && x.group !== last };
+				last = x.group;
+				return line;
+			});
+		};
+		const blank = function () { return { text: "", gap: false }; };
+		const columns = list.groups.filter(function (g) { return !g.block; }).map(function (g) {
+			return { name: g.name, lines: ticked(g).concat([blank(), blank()]) };
+		});
 		const blocks = list.groups.filter(function (g) { return g.block; }).map(function (g) {
-			const lines = ticked(g);
+			const lines = ticked(g).map(function (l) { return { text: l.text, gap: false }; });
 			if (!lines.length && g.name === OTHER) return null;
 			const fill = Math.max(4, Math.ceil(lines.length / 4) * 4);
-			while (lines.length < fill) lines.push("");
+			while (lines.length < fill) lines.push(blank());
 			return { name: g.name, lines: lines };
 		}).filter(Boolean);
 		return { columns: columns, blocks: blocks };
