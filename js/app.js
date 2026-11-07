@@ -229,6 +229,7 @@ function show() {
 	if (paper) paper.remove();
 	window.scrollTo(0, 0);
 	var a = current.args;
+	wideDrawn = wide.matches;
 	if (wide.matches) renderSide();
 	if (current.name === "recipe") return screenRecipe(a.id, a.day);
 	if (current.name === "edit") return screenEdit(a.id, a.day);
@@ -240,7 +241,19 @@ function show() {
 	if (!getSettings().url) return screenSettings(true);
 	return screenWeek();
 }
-wide.addEventListener("change", show);
+// Printing lays the page out at paper width, which can cross the laptop/phone line: don't redraw
+// then, or the page being printed is swapped for a half-drawn one (a blank printout).
+var printing = false;
+window.addEventListener("beforeprint", function () { printing = true; });
+window.addEventListener("afterprint", function () {
+	printing = false;
+	if (wide.matches !== wideDrawn) show();
+});
+var wideDrawn = wide.matches;
+wide.addEventListener("change", function () {
+	if (printing || window.matchMedia("print").matches || wide.matches === wideDrawn) return;
+	show();
+});
 
 /* ---------------- This week ---------------- */
 var PLAN_FRESH_MS = 5 * 60 * 1000;
