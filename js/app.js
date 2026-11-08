@@ -509,11 +509,18 @@ function screenSwap(dayKey) {
 			if (!hits.length) results.appendChild(el("div", { class: "small muted" }, "No recipe matches \u201c" + search.value.trim() + "\u201d"));
 			hits.forEach(function (r) { results.appendChild(pickCard(r, r.minutes ? r.minutes + " min" : "", put(r))); });
 		});
+		var others = o.others.filter(function (x) { return !x.isPast; });
 		main.textContent = "";
 		add(main, [
 			el("button", { type: "button", class: "back", onclick: back }, icon("back"), "Cancel"),
 			el("h1", { style: "font-size:24px" }, "Swap " + o.day.label),
 			el("div", { class: "muted" }, "Now: ", el("b", { style: "color:var(--text)" }, o.now ? o.now.title : "nothing planned")),
+			// swapping with another night this week is the most likely change, so it comes first
+			others.length ? el("section", { class: "stack" }, el("h2", null, "Swap with another day"),
+				el("div", { class: "list" }, others.map(function (x) {
+					return el("button", { type: "button", onclick: function () { done(call("swapDays", { dayA: dayKey, dayB: x.key }), "Swapped " + o.day.label + " and " + x.label); } },
+						el("b", null, x.label), el("span", { class: x.title ? "" : "muted" }, x.title || "Nothing planned"));
+				}))) : null,
 			o.suggestions.length ? el("section", { class: "stack" }, el("h2", null, "Suggestions"),
 				o.suggestions.map(function (r) { return pickCard(r, (r.minutes ? r.minutes + " min \u00b7 " : "") + r.why, put(r)); })) : null,
 			el("section", { class: "stack" }, el("label", { for: "find", class: "lab", style: "font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)" }, "Or find a recipe"), search, results),
@@ -521,11 +528,6 @@ function screenSwap(dayKey) {
 				otherDinner(o.noCooking || NO_COOKING, function (t, quick) {
 					done(call("setDinner", { day: dayKey, choice: quick ? { noCooking: t } : { text: t } }), t + " on " + o.day.label);
 				})),
-			el("section", { class: "stack" }, el("h2", null, "Swap with another day"),
-				el("div", { class: "list" }, o.others.filter(function (x) { return !x.isPast; }).map(function (x) {
-					return el("button", { type: "button", onclick: function () { done(call("swapDays", { dayA: dayKey, dayB: x.key }), "Swapped " + o.day.label + " and " + x.label); } },
-						el("b", null, x.label), el("span", { class: x.title ? "" : "muted" }, x.title || "Nothing planned"));
-				}))),
 			el("p", { class: "small muted", style: "margin:0" }, "Your choice goes straight into the Dinners calendar and onto the fridge.")
 		]);
 	}).catch(function (e) { showError(main, e, function () { screenSwap(dayKey); }); });
