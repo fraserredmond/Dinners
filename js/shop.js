@@ -202,6 +202,7 @@
 				from: line.from.join(", "),
 				source: line.source,
 				check: check,
+				added: line.source === "added" || Boolean(line.alsoAdded),
 				ticked: check ? Boolean(ticked[key]) : !unticked[key],
 				group: place[0] + ":" + place[1],
 				place: place

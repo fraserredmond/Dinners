@@ -38,6 +38,100 @@ function call(action, extra) {
 try { badgeName = localStorage.getItem("dinners.badge") || ""; } catch (e) { badgeName = ""; }
 function badgeText(extra) { return "\u2713 " + (badgeName || "Marked") + (extra || ""); }
 
+/* ---------------- quick screens: the last copy at once, then the fresh one ----------------
+ * Each answer from the Sheet is kept on this phone. A screen shows the kept copy straight away
+ * and swaps in the new one when the Sheet answers (a few seconds), if anything changed. */
+var STORE = "dinners.c.";
+var screenToken = 0; // goes up on every screen change, so a late answer doesn't draw over another screen
+
+function storeKey(action, extra) { return STORE + action + ":" + JSON.stringify(extra || {}); }
+function storeGet(key) {
+	try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+}
+function storePut(key, data) {
+	var text = JSON.stringify(data);
+	try { localStorage.setItem(key, text); } catch (e) {
+		storeForget(["recipe"]); // full: recipes are the biggest and the easiest to fetch again
+		try { localStorage.setItem(key, text); } catch (e2) { /* fine: it's only a speed-up */ }
+	}
+}
+/** Forgets kept answers: all of them, or those for some actions ("week", 'recipe:{"id":"x"'). */
+function storeForget(prefixes) {
+	try {
+		Object.keys(localStorage).forEach(function (k) {
+			if (k.indexOf(STORE) !== 0) return;
+			if (!prefixes || prefixes.some(function (p) { return k.indexOf(STORE + p + (p.indexOf(":") === -1 ? ":" : "")) === 0; })) localStorage.removeItem(k);
+		});
+	} catch (e) { /* nothing kept */ }
+}
+/** After any change to the dinners: the kept week, plan and shopping list are out of date. */
+function changed() {
+	cache.week = null;
+	cache.plan = null;
+	storeForget(["week", "shopping"]);
+}
+
+/**
+ * Loads a screen: render(data, fresh) runs at once with the kept copy (fresh = false), then
+ * with the Sheet's answer if it differs. failed(error) runs only if there's nothing to show.
+ */
+function quick(action, extra, render, failed) {
+	var key = storeKey(action, extra);
+	var token = screenToken;
+	var old = storeGet(key);
+	var shown = old ? JSON.stringify(old) : null;
+	if (old) {
+		try { render(old, false); } catch (e) { shown = null; }
+	}
+	return call(action, extra).then(function (data) {
+		storePut(key, data);
+		if (token !== screenToken) return;
+		if (JSON.stringify(data) === shown) return;
+		var y = window.scrollY;
+		render(data, true);
+		if (shown) window.scrollTo(0, y);
+	}).catch(function (e) {
+		if (token !== screenToken) return;
+		// a phone that's set up wrong must say so, even with an old copy to show
+		if (!shown || /SECRET|SETUP|BAD_RESPONSE/.test(e.code || "")) failed(e);
+		else toast("Couldn't reach the Sheet: this is the copy from last time.");
+	});
+}
+
+/** Fetches a few likely next screens in the background, at most every 10 minutes. */
+var lastPrefetch = 0;
+function prefetch(w) {
+	if (Date.now() - lastPrefetch < 10 * 60 * 1000 || (typeof navigator !== "undefined" && navigator.onLine === false)) return;
+	lastPrefetch = Date.now();
+	var jobs = [["recipes", {}], ["shopping", { offset: shopOffset }]];
+	(w.days || []).forEach(function (d) {
+		if (d.isToday && d.dinner && d.dinner.recipeId) jobs.unshift(["recipe", { id: d.dinner.recipeId, day: d.key }]);
+	});
+	jobs.forEach(function (j) {
+		call(j[0], j[1]).then(function (data) { storePut(storeKey(j[0], j[1]), data); }).catch(function () { /* try again later */ });
+	});
+}
+
+/* photos kept in the Sheet ("sheet:<id>") are fetched once and kept on the phone: they never change */
+var PHOTO_CACHE = "dinners-photos";
+var photoMemory = {};
+function sheetPhoto(pid) {
+	if (photoMemory[pid]) return photoMemory[pid];
+	var url = "photo/" + pid;
+	var fromStore = typeof caches !== "undefined"
+		? caches.open(PHOTO_CACHE).then(function (c) { return c.match(url).then(function (hit) { return hit ? hit.text() : null; }); }).catch(function () { return null; })
+		: Promise.resolve(null);
+	photoMemory[pid] = fromStore.then(function (text) {
+		if (text) return text;
+		return call("sheetPhoto", { pid: pid }).then(function (res) {
+			if (!res.photo) return null;
+			if (typeof caches !== "undefined") caches.open(PHOTO_CACHE).then(function (c) { return c.put(url, new Response(res.photo)); }).catch(function () { /* fine */ });
+			return res.photo;
+		});
+	}).catch(function () { delete photoMemory[pid]; return null; });
+	return photoMemory[pid];
+}
+
 /* ---------------- small helpers ---------------- */
 var ICONS = {
 	week: '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>',
@@ -71,8 +165,13 @@ function add(parent, c) {
 	if (Array.isArray(c)) { c.forEach(function (x) { add(parent, x); }); return; }
 	parent.appendChild(typeof c === "object" ? c : document.createTextNode(String(c)));
 }
-/** A photo that hides itself if it can't load. */
+/** A photo that hides itself if it can't load. "sheet:<id>" photos come from the phone's store. */
 function photo(src, alt) {
+	if (/^sheet:/.test(src || "")) {
+		var img = el("img", { alt: alt || "", class: "loadingimg", onerror: function (e) { e.target.remove(); } });
+		sheetPhoto(src.slice(6)).then(function (data) { if (data) { img.src = data; img.classList.remove("loadingimg"); } else img.remove(); });
+		return img;
+	}
 	return el("img", { src: src, alt: alt || "", onerror: function (e) { e.target.remove(); } });
 }
 function icon(name) { return el("span", { html: ICONS[name], style: "display:inline-flex" }); }
@@ -221,6 +320,7 @@ function renderNav() {
 }
 
 function show() {
+	screenToken++;
 	renderNav();
 	main.classList.toggle("plain", false);
 	main.style.opacity = ""; // a save dims the screen while it works
@@ -273,6 +373,7 @@ function loadPlan(prefetch) {
 }
 
 function loadWeek(force) {
+	if (!cache.week && !force) cache.week = storeGet(storeKey("week", { offset: 0 }));
 	if (cache.week && !force) return Promise.resolve(cache.week);
 	return call("week", { offset: 0 }).then(function (w) { cache.week = w; return w; });
 }
@@ -307,10 +408,10 @@ function weekList(w, compact) {
 
 function screenWeek() {
 	loading(main);
-	loadWeek(true).then(function (w) {
+	var token = screenToken;
+	quick("week", { offset: 0 }, function (w) {
+		cache.week = w;
 		if (current.name !== "week") return;
-		var pre = loadPlan(true);
-		if (pre) pre.catch(function () { /* Plan will ask again and show the error there */ });
 		if (wide.matches) {
 			renderSide();
 			var t = w.days.filter(function (d) { return d.isToday; })[0];
@@ -327,7 +428,13 @@ function screenWeek() {
 			el("button", { type: "button", class: "cog", "aria-label": "Settings", onclick: function () { go("settings"); }, html: ICONS.cog }),
 			weekList(w, false)
 		]);
-	}).catch(function (e) { showError(main, e, screenWeek); });
+	}, function (e) { showError(main, e, screenWeek); }).then(function () {
+		// once the Sheet has answered: get next week's plan and the likely next screens ready
+		if (token !== screenToken || !cache.week) return;
+		var pre = loadPlan(true);
+		if (pre) pre.catch(function () { /* Plan will ask again and show the error there */ });
+		prefetch(cache.week);
+	});
 }
 
 function renderSide() {
@@ -340,7 +447,7 @@ function renderSide() {
 /* ---------------- a recipe ---------------- */
 function screenRecipe(id, dayKey, inWeek) {
 	loading(main);
-	call("recipe", { id: id, day: dayKey || null }).then(function (r) {
+	quick("recipe", { id: id, day: dayKey || null }, function (r) {
 		var servings = r.household;
 		var ingList = el("div", { class: "ings" });
 		var count = el("div", { class: "count" });
@@ -387,7 +494,7 @@ function screenRecipe(id, dayKey, inWeek) {
 				el("button", { type: "button", class: "btn", onclick: function () { window.print(); } }, icon("print"), "Print"),
 				day && (day.isToday || day.key > todayKey()) ? el("button", { type: "button", class: "btn primary", onclick: function () { go("swap", { day: day.key }); } }, icon("swap"), "Swap " + day.label + "'s dinner") : null)
 		]);
-	}).catch(function (e) { showError(main, e, function () { screenRecipe(id, dayKey, inWeek); }); });
+	}, function (e) { showError(main, e, function () { screenRecipe(id, dayKey, inWeek); }); });
 }
 
 function todayKey() {
@@ -406,7 +513,7 @@ function screenEdit(id, dayKey) {
 		var mins = el("input", { id: "mins", class: "field mins", type: "number", inputmode: "numeric", min: "1", max: "600", value: String(minutes) });
 		var notes = el("textarea", { id: "notes", class: "field", rows: "5" });
 		notes.value = r.notes || "";
-		var pic = r.photo ? el("img", { src: r.photo, alt: "Current photo" }) : el("div", { class: "nophoto" }, "No photo yet");
+		var pic = r.photo ? photo(r.photo, "Current photo") : el("div", { class: "nophoto" }, "No photo yet");
 		var picWrap = el("div", null, pic);
 		var step = function (n) { var v = Math.max(5, Math.round((Number(mins.value) || minutes) / 5) * 5 + n); mins.value = String(v); };
 		var pick = function (capture) {
@@ -427,6 +534,7 @@ function screenEdit(id, dayKey) {
 			save.disabled = true;
 			save.textContent = "Saving\u2026";
 			call("saveEdit", { id: r.id, changes: { minutes: Number(mins.value), notes: notes.value, photo: newPhoto } }).then(function () {
+				storeForget(["recipe:" + JSON.stringify({ id: r.id }).slice(0, -1), "recipes", "week"]);
 				toast("Saved. The fridge updates within 15 minutes.");
 				go("recipe", { id: r.id, day: dayKey || "" }, true);
 			}).catch(function (e) {
@@ -489,7 +597,7 @@ function screenSwap(dayKey) {
 			busy = true;
 			main.style.opacity = "0.6";
 			p.then(function () {
-				cache.week = null; cache.plan = null;
+				changed();
 				toast(msg);
 				go("week", {}, true);
 			}).catch(function (e) {
@@ -638,7 +746,7 @@ function screenPlan() {
 		};
 		// photos kept in the Sheet arrive one by one
 		var fetchPhotos = function () {
-			shown.filter(function (r) { return r.sheetPhoto && !photos[r.id]; }).forEach(function (r) {
+			shown.filter(function (r) { return r.sheetPhoto && !r.photo && !photos[r.id]; }).forEach(function (r) {
 				call("photo", { id: r.id }).then(function (res) { if (res.photo) { photos[r.id] = res.photo; draw(); } }).catch(function () { /* no photo */ });
 			});
 		};
@@ -714,7 +822,7 @@ function screenPlan() {
 			saveBtn.textContent = "Saving…";
 			call("savePlan", { picks: list }).then(function (res) {
 				saveDraft(start, null);
-				cache.week = null; cache.plan = null;
+				changed();
 				toast(res.saved.length + " dinner" + (res.saved.length === 1 ? "" : "s") + " saved" + (res.skipped.length ? ". " + res.skipped.length + " night" + (res.skipped.length === 1 ? " was" : "s were") + " already taken" : ""));
 				go("plan", {}, true);
 			}).catch(function (e) { toast(e.message); draw(); });
@@ -747,7 +855,7 @@ function shortKey(k) {
 
 function screenRecipes() {
 	loading(main);
-	call("recipes").then(function (res) {
+	quick("recipes", {}, function (res) {
 		var f = listState.filter;
 		var list = el("div", { class: "list" });
 		var shown = el("span", { class: "small muted" });
@@ -794,17 +902,23 @@ function screenRecipes() {
 			bar,
 			list
 		]);
-	}).catch(function (e) { showError(main, e, screenRecipes); });
+	}, function (e) { showError(main, e, screenRecipes); });
 }
 
 /* ---------------- shopping ---------------- */
 var shopOffset = 1; // which week the list is for: 1 = next week, 0 = this week
+var shopView = "all"; // "added": just the things added by hand, for a quick trip mid-week
+try { if (localStorage.getItem("dinners.shopView") === "added") shopView = "added"; } catch (e) { /* default */ }
 
 function screenShopping() {
 	loading(main);
 	document.body.classList.add("shopping");
-	call("shopping", { offset: shopOffset }).then(function (s) {
-		if (current.name !== "shopping") return;
+	var touched = false; // once you've ticked or added something, a late answer from the Sheet doesn't redraw over it
+	var storeAt = storeKey("shopping", { offset: shopOffset });
+	var mine = null; // the list as changed on this phone
+	var syncSheet = null; // saves the list to the Sheet if it differs from what the Sheet has
+	quick("shopping", { offset: shopOffset }, function (s, fresh) {
+		if (current.name !== "shopping" || (fresh && touched)) return;
 		var state = { unticked: s.saved.unticked.slice(), ticked: (s.saved.ticked || []).slice(), added: s.saved.added.slice() };
 		var known = {};
 		(s.known || []).forEach(function (k) { known[FridgeShop.itemKey(k[0])] = k[1]; });
@@ -813,6 +927,14 @@ function screenShopping() {
 		var groupsEl = el("div", { class: "stack", style: "gap:16px" });
 		var oftenEl = el("div", { class: "frow" });
 		var printBtn = el("button", { type: "button", class: "btn primary", onclick: function () { window.print(); } });
+		var printBar = el("div", { class: "stack savebar" }, printBtn);
+		var viewRow = el("div", { class: "frow" });
+		var info = el("div", { class: "card small" });
+		var setView = function (v) {
+			shopView = v;
+			try { localStorage.setItem("dinners.shopView", v); } catch (e) { /* just for now */ }
+			draw();
+		};
 		var saveTimer = null;
 
 		var build = function () {
@@ -824,7 +946,14 @@ function screenShopping() {
 			list.groups.forEach(function (g) { g.items.forEach(function (x) { rows.push({ buy: x.ticked, item: x.name, qty: x.qty, section: x.section, from: x.from }); }); });
 			return rows;
 		};
+		var sigOf = function (rows) { return rows.map(function (x) { return [x.item, x.qty, x.buy ? 1 : 0].join("|"); }).join("\n"); };
 		var save = function (now) {
+			touched = touched || !now;
+			var rows = rowsToSave();
+			// keep this phone's copy up to date, so coming back shows the list as you left it
+			s.saved = { any: true, unticked: state.unticked.slice(), ticked: state.ticked.slice(), added: state.added.slice(), sig: sigOf(rows) };
+			storePut(storeAt, s);
+			mine = s;
 			clearTimeout(saveTimer);
 			saveTimer = setTimeout(function () {
 				call("shopSave", { week: s.week.start, rows: rowsToSave() }).catch(function (e) { toast("The list wasn't saved: " + e.message); });
@@ -855,12 +984,26 @@ function screenShopping() {
 
 		var draw = function () {
 			build();
+			var addedOnly = shopView === "added";
+			var nAdded = 0;
+			list.groups.forEach(function (g) { g.items.forEach(function (x) { if (x.added) nAdded++; }); });
+			viewRow.textContent = "";
+			add(viewRow, [
+				el("button", { type: "button", class: "toggle", "aria-pressed": String(!addedOnly), onclick: function () { setView("all"); } }, "Everything"),
+				el("button", { type: "button", class: "toggle", "aria-pressed": String(addedOnly), onclick: function () { setView("added"); } }, "Added by hand (" + nAdded + ")")
+			]);
+			info.textContent = "";
+			info.style.display = addedOnly ? "none" : "";
+			if (!addedOnly) add(info, ["Everything for " + s.week.range + " is ticked to buy. ", el("b", null, "Untick what you already have."),
+				s.dinners.length ? el("div", { class: "muted", style: "margin-top:4px" }, "From " + s.dinners.length + " dinner" + (s.dinners.length === 1 ? "" : "s") + " with a recipe, for " + s.household + ".") : null]);
+			printBar.style.display = addedOnly ? "none" : "";
 			groupsEl.textContent = "";
 			list.groups.forEach(function (g) {
-				if (!g.items.length) return;
+				var items = addedOnly ? g.items.filter(function (x) { return x.added; }) : g.items;
+				if (!items.length) return;
 				groupsEl.appendChild(el("section", { class: "stack", style: "gap:6px" },
 					el("h2", null, g.name),
-					el("div", { class: "shopcard" }, g.items.map(function (x) {
+					el("div", { class: "shopcard" }, items.map(function (x) {
 						return el("div", { class: "srow" + (x.ticked ? "" : " off") },
 							el("button", { type: "button", class: "stoggle", "aria-pressed": String(x.ticked), onclick: function () { toggle(x); } },
 								el("span", { class: "sbox", html: x.ticked ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' : "" }),
@@ -868,7 +1011,11 @@ function screenShopping() {
 							x.source === "added" ? el("button", { type: "button", class: "x", "aria-label": "Take " + x.name + " off the list", onclick: function () { removeAdded(x); } }, "×") : null);
 					}))));
 			});
-			if (!list.groups.some(function (g) { return g.items.length; })) {
+			if (addedOnly && !nAdded) {
+				groupsEl.appendChild(el("div", { class: "card stack" },
+					el("b", null, "Nothing added by hand yet."),
+					el("span", { class: "muted" }, "Add things below as you think of them, then come back here in the shop.")));
+			} else if (!list.groups.some(function (g) { return g.items.length; })) {
 				groupsEl.appendChild(el("div", { class: "card stack" },
 					el("b", null, "Nothing on the list yet."),
 					el("span", { class: "muted" }, s.dinners.length ? "" : "No dinners with a recipe are planned for " + s.week.range + ".")));
@@ -919,6 +1066,7 @@ function screenShopping() {
 			});
 		};
 		input.addEventListener("input", function () {
+			touched = true;
 			var k = known[FridgeShop.itemKey(input.value)];
 			if (k && sectionNames.indexOf(k) !== -1) { chosen = k; drawSections(); }
 		});
@@ -934,10 +1082,17 @@ function screenShopping() {
 		input.addEventListener("keydown", function (e) { if (e.key === "Enter") addNow(); });
 		drawSections();
 
+		// "This week · Thu 12 Nov" (its last day, the next big shop) and "Next week · Fri 13 Nov" (its first day)
+		var dayLabel = function (key, plus) {
+			var p = key.split("-").map(Number);
+			var d = new Date(p[0], p[1] - 1, p[2] + (plus || 0));
+			return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()] + " " + d.getDate() + " " +
+				["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+		};
 		var weekBtn = function (n) {
 			var w = s.weeks[n];
-			return el("button", { type: "button", class: "toggle", "aria-pressed": String(s.offset === n), onclick: function () { if (s.offset !== n) { shopOffset = n; screenShopping(); } } },
-				(n ? "Next week" : "This week") + " · " + w.range);
+			return el("button", { type: "button", class: "toggle", "aria-pressed": String(s.offset === n), onclick: function () { if (s.offset !== n) { shopOffset = n; screenToken++; screenShopping(); } } },
+				n ? "Next week \u00b7 " + dayLabel(w.start) : "This week \u00b7 " + dayLabel(w.start, 6));
 		};
 
 		draw();
@@ -945,19 +1100,22 @@ function screenShopping() {
 		add(main, [
 			el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Shopping"), el("span", { class: "small muted" }, s.today)),
 			el("div", { class: "frow" }, weekBtn(0), weekBtn(1)),
-			el("div", { class: "card small" }, "Everything for " + s.week.range + " is ticked to buy. ", el("b", null, "Untick what you already have."),
-				s.dinners.length ? el("div", { class: "muted", style: "margin-top:4px" }, "From " + s.dinners.length + " dinner" + (s.dinners.length === 1 ? "" : "s") + " with a recipe, for " + s.household + ".") : null),
+			viewRow,
+			info,
 			groupsEl,
 			el("section", { class: "stack", style: "gap:8px" },
 				el("label", { for: "additem", class: "lab", style: "font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700" }, "Add something"),
 				el("div", { class: "typerow" }, input, el("button", { type: "button", class: "btn primary usebtn", onclick: addNow }, "Add")),
 				el("div", { class: "small muted" }, "Section:"), secRow,
 				s.often && s.often.length ? el("div", { class: "small muted" }, "Often bought:") : null, oftenEl),
-			el("div", { class: "stack savebar" }, printBtn)
+			printBar
 		]);
-		// the Sheet's Shopping list tab follows the list (it may have changed since: new dinners, new regulars)
-		save(true);
-	}).catch(function (e) { showError(main, e, screenShopping); });
+		// the Sheet's Shopping list tab follows the list, if it has changed (new dinners, new regulars)
+		syncSheet = function () { if (sigOf(rowsToSave()) !== s.saved.sig) save(true); };
+	}, function (e) { showError(main, e, screenShopping); }).then(function () {
+		if (touched && mine) storePut(storeAt, mine); // the Sheet's answer was from before your changes
+		else if (syncSheet && current.name === "shopping") syncSheet();
+	});
 }
 
 /* ---------------- settings ---------------- */
@@ -974,7 +1132,7 @@ function screenSettings(first) {
 		status.textContent = "Testing\u2026";
 		call("ping").then(function () {
 			status.textContent = "Connected.";
-			cache.week = null; cache.plan = null;
+			changed();
 			toast("Connected to the Sheet");
 			go("week", {}, true);
 		}).catch(function (e) { status.textContent = e.message; });
@@ -1017,7 +1175,7 @@ function parseHash(hash) {
 }
 // a setup link opened while the app is already open in this tab
 window.addEventListener("hashchange", function () {
-	if (/[#&]setup=/.test(location.hash) && takeSetupLink()) { cache.week = null; cache.plan = null; go("week", {}, true); }
+	if (/[#&]setup=/.test(location.hash) && takeSetupLink()) { storeForget(); changed(); go("week", {}, true); }
 });
 takeSetupLink();
 var first = parseHash(location.hash);

@@ -1,7 +1,8 @@
 // Dinners - app-shell cache. Network first, so a new version shows on the next open;
 // the cache answers when the phone is offline. Bump CACHE_VERSION on each release.
-// Only the app's own files are cached: answers from the Sheet are never stored here.
-const CACHE_VERSION = "dinners-v8";
+// Only the app's own files are cached here. (The app keeps its own copies of the Sheet's answers,
+// and its photos in the "dinners-photos" cache, which this leaves alone.)
+const CACHE_VERSION = "dinners-v10";
 const SHELL = ["./", "./index.html", "./app.css", "./manifest.json", "./js/app.js", "./js/scale.js", "./js/shop.js", "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", (evt) => {
@@ -9,7 +10,8 @@ self.addEventListener("install", (evt) => {
 });
 
 self.addEventListener("activate", (evt) => {
-	evt.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+	// keep the photos the app stores (dinners-photos); clear old versions of the app's files
+	evt.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE_VERSION && k !== "dinners-photos").map((k) => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener("fetch", (evt) => {
