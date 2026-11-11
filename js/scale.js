@@ -20,7 +20,9 @@
 
 	function roundQty(q, unit) {
 		if (METRIC.includes(unit)) return q < 50 ? Math.max(5, roundTo(q, 5)) : roundTo(q, 25);
-		if (BIG_METRIC.includes(unit) || SPOONS.includes(unit)) return Math.max(0.25, roundTo(q, 0.25));
+		// kg and litres by the same rule in grams and millilitres: 0.6kg for 3 instead of 4 is 450g, not ½kg
+		if (BIG_METRIC.includes(unit)) return Math.round(roundQty(q * 1000, unit === "kg" ? "g" : "ml")) / 1000;
+		if (SPOONS.includes(unit)) return Math.max(0.25, roundTo(q, 0.25));
 		if (q >= 10) return Math.round(q);
 		return Math.max(0.5, roundTo(q, 0.5));
 	}
@@ -35,12 +37,19 @@
 		return String(Math.round(q * 10) / 10);
 	}
 
+	// plurals the rules below get wrong
+	const IRREGULAR = { leaves: "leaf", loaves: "loaf", halves: "half", knives: "knife", chillies: "chilli", cookies: "cookie", pies: "pie",
+		brownies: "brownie", veggies: "veggie", molasses: "molasses", series: "series", species: "species" };
+
 	/** "sweet potatoes" -> "sweet potato" when there's only one (only for unit-less items). */
 	function singular(item) {
 		const words = item.split(" ");
 		const last = words.pop();
 		let s = last;
-		if (/oes$/i.test(last)) s = last.slice(0, -2);
+		const irregular = IRREGULAR[last.toLowerCase()];
+		if (irregular) s = /^[A-Z]/.test(last) ? irregular.charAt(0).toUpperCase() + irregular.slice(1) : irregular;
+		else if (/(us|ss|is)$/i.test(last) || last.length <= 3) s = last; // hummus, couscous, cress, cos
+		else if (/oes$/i.test(last)) s = last.slice(0, -2);
 		else if (/ies$/i.test(last)) s = last.slice(0, -3) + "y";
 		else if (/(ches|shes|xes)$/i.test(last)) s = last.slice(0, -2);
 		else if (/[^s]s$/i.test(last)) s = last.slice(0, -1);
@@ -62,7 +71,11 @@
 		let item = String(ing.item || "");
 		if (qty !== null && qty <= 1 && !unit) item = singular(item);
 		let amount = "";
-		if (qty !== null) {
+		if (qty !== null && scaled && BIG_METRIC.includes(unit)) {
+			// scaled kg and litres: in grams and millilitres under a kilo or litre ("450g"), else "1¼kg"
+			const small = Math.round(qty * 1000);
+			amount = small < 1000 ? small + (unit === "kg" ? "g" : "ml") : formatQty(Math.round(small / 10) / 100) + unit;
+		} else if (qty !== null) {
 			const unitText = !unit ? "" : unit === "tin" || unit === "carton" || unit === "pack" || unit === "jar" || unit === "bunch" || unit === "slice"
 				? " " + unit + (qty > 1 ? "s" : "")
 				: (NO_SPACE.includes(unit) ? "" : " ") + unit;

@@ -1,7 +1,7 @@
 :root {
 	--bg: #f3f0e9; --panel: #ffffff; --panel2: #e8e3d8; --past: #ebe7de; --line: #dad3c5; --soft: #ece7dc;
 	--text: #1c1e21; --muted: #4a5058; --dim: #666c75;
-	--accent: #e3a33a; --accentbg: #fff4de; --accenttext: #8a4f00; --beth: #1e7a50; --danger: #b3261e;
+	--accent: #e3a33a; --accentbg: #fff4de; --accenttext: #8a4f00; --mark: #1e7a50; --danger: #b3261e;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text); font-family: "Atkinson Hyperlegible", system-ui, sans-serif; font-size: 17px; line-height: 1.35; -webkit-text-size-adjust: 100%; }
@@ -38,7 +38,7 @@ h2 { margin: 0; font-size: 15px; letter-spacing: 0.08em; text-transform: upperca
 .card { background: var(--panel); border-radius: 18px; padding: 14px 16px; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { font-size: 14px; font-weight: 700; padding: 5px 10px; border-radius: 999px; background: var(--panel2); white-space: nowrap; }
-.chip.beth { background: var(--beth); color: #fff; }
+.chip.marked { background: var(--mark); color: #fff; }
 .chip.carbs { background: none; border: 2px solid var(--text); padding: 3px 8px; }
 .back { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; border: none; background: none; padding: 0; font-weight: 700; color: var(--accenttext); }
 .btn { min-height: 52px; border-radius: 14px; border: 2px solid var(--text); background: var(--panel); font-size: 17px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; width: 100%; }
@@ -101,7 +101,7 @@ textarea.field { height: auto; padding: 10px 12px; line-height: 1.4; resize: ver
 .list button { width: 100%; border: none; background: none; display: flex; justify-content: space-between; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--soft); text-align: left; min-height: 48px; }
 .list button:last-child { border-bottom: none; }
 .toggle { min-height: 44px; padding: 0 14px; border-radius: 999px; border: 2px solid var(--line); background: var(--panel); font-size: 15px; }
-.toggle[aria-pressed="true"] { background: var(--beth); border-color: var(--beth); color: #fff; font-weight: 700; }
+.toggle[aria-pressed="true"] { background: var(--mark); border-color: var(--mark); color: #fff; font-weight: 700; }
 /* states */
 .loading { padding: 40px 0; text-align: center; color: var(--muted); }
 .error { background: #fdecea; border: 2px solid var(--danger); color: #5c1410; border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -126,11 +126,11 @@ textarea.field { height: auto; padding: 10px 12px; line-height: 1.4; resize: ver
 .scards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 @media (min-width: 700px) { .scards { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .scard { text-align: left; border: 3px solid transparent; background: var(--panel); border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; padding: 0; }
-.scard.on { border-color: var(--beth); }
+.scard.on { border-color: var(--mark); }
 .scard img, .scard .noimg { width: 100%; height: 96px; object-fit: cover; display: block; background: var(--panel2); }
 .scard .sc { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 4px; }
 .scard .t { font-size: 15px; font-weight: 700; line-height: 1.2; }
-.scard .onday { color: var(--beth); font-weight: 700; }
+.scard .onday { color: var(--mark); font-weight: 700; }
 .savebar { position: sticky; bottom: 70px; background: var(--bg); padding-top: 8px; }
 @media (min-width: 1000px) { .savebar { bottom: 0; background: var(--panel); padding-bottom: 8px; } }
 .overlay { position: fixed; inset: 0; background: rgb(28 30 33 / 55%); z-index: 20; display: flex; align-items: flex-end; justify-content: center; }
@@ -195,7 +195,7 @@ textarea.field { height: auto; padding: 10px 12px; line-height: 1.4; resize: ver
 .srow { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--soft); }
 .srow:last-child { border-bottom: none; }
 .stoggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 8px; border: none; background: none; text-align: left; min-height: 52px; }
-.sbox { width: 28px; height: 28px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--beth); border: 2px solid var(--beth); }
+.sbox { width: 28px; height: 28px; flex: none; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--mark); border: 2px solid var(--mark); }
 .srow.off .sbox { background: var(--panel); border-color: #8c939d; }
 .stext { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .sname { font-size: 17px; font-weight: 700; }
@@ -225,3 +225,8 @@ textarea.field { height: auto; padding: 10px 12px; line-height: 1.4; resize: ver
 	#printsheet .pgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: 3mm; }
 }
 }
+
+/* a copy the Sheet hasn't confirmed, and a recipe that isn't that day's dinner any more */
+.stale { background: var(--accentbg); color: var(--accenttext); border-radius: 12px; padding: 10px 12px; font-size: 15px; line-height: 1.35; }
+.notice { background: var(--accentbg); border: 2px solid var(--accent); color: var(--text); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+@media print { .stale, .notice { display: none; } }

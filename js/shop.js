@@ -58,6 +58,22 @@
 		return out;
 	}
 
+	/** The amount on its own, for the Sheet's Qty column: "500g, ×2", "20ml + 2 tsp", "×3" */
+	function qtyOf(parts, extra) {
+		const out = [];
+		if (parts.length === 1 && WHOLE.indexOf(parts[0].u) !== -1) {
+			if (parts[0].q > 1) out.push("\u00d7" + Scale.formatQty(parts[0].q));
+		} else if (parts.length) {
+			out.push(parts.map(function (p) { return amountText(p.q, p.u); }).join(" + "));
+		}
+		if (extra) {
+			const n = countOf(extra);
+			if (n === null) out.push(extra);
+			else if (n > 1) out.push("\u00d7" + n);
+		}
+		return out.join(", ");
+	}
+
 	/** Only a spoonful or a few grams: probably in the cupboard already. */
 	function smallAmount(parts) {
 		return parts.length > 0 && parts.every(function (p) {
@@ -148,6 +164,7 @@
 			const key = itemKey(item);
 			const line = add(key, function () { return { key: key, names: [], totals: {}, loose: false, sections: {}, from: [], source: "regular" }; });
 			line.names.unshift(item);
+			line.regular = true; // bought every week: never a "check the cupboard"
 			if (g.qty !== undefined && String(g.qty).trim() !== "") line.extra = String(g.qty).trim();
 			if (g.section) line.sections[g.section] = (line.sections[g.section] || 0) + 100; // the regulars tab says where it is
 			line.from.push("Every week");
@@ -191,12 +208,12 @@
 			else if (plural && line.source === "dinner") name = plural;
 			const label = labelOf(capital(name), parts, line.extra);
 			// a spoonful of soy sauce: on the list to check, but not ticked unless you tick it
-			const check = line.source === "dinner" && !line.alsoAdded && smallAmount(parts);
+			const check = line.source === "dinner" && !line.alsoAdded && !line.regular && smallAmount(parts);
 			const place = placeOf(key, section, rules);
 			return {
 				key: key,
 				name: capital(name),
-				qty: label.slice(capital(name).length).replace(/^ \(|\)$/g, "").trim(),
+				qty: qtyOf(parts, line.extra),
 				label: label,
 				section: section,
 				from: line.from.join(", "),

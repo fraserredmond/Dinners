@@ -45,11 +45,18 @@ var STORE = "dinners.c.";
 var screenToken = 0; // goes up on every screen change, so a late answer doesn't draw over another screen
 
 function storeKey(action, extra) { return STORE + action + ":" + JSON.stringify(extra || {}); }
-function storeGet(key) {
-	try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+/** A kept answer and when it came from the Sheet: { at (ms, or null if not known), data } */
+function storeEntry(key) {
+	try {
+		var v = localStorage.getItem(key);
+		if (!v) return null;
+		var o = JSON.parse(v);
+		return o && o.v === 2 ? { at: o.at, data: o.data } : { at: null, data: o };
+	} catch (e) { return null; }
 }
-function storePut(key, data) {
-	var text = JSON.stringify(data);
+function storeGet(key) { var e = storeEntry(key); return e ? e.data : null; }
+function storePut(key, data, at) {
+	var text = JSON.stringify({ v: 2, at: at || Date.now(), data: data });
 	try { localStorage.setItem(key, text); } catch (e) {
 		storeForget(["recipe"]); // full: recipes are the biggest and the easiest to fetch again
 		try { localStorage.setItem(key, text); } catch (e2) { /* fine: it's only a speed-up */ }
@@ -78,7 +85,8 @@ function changed() {
 function quick(action, extra, render, failed) {
 	var key = storeKey(action, extra);
 	var token = screenToken;
-	var old = storeGet(key);
+	var kept = storeEntry(key);
+	var old = kept && kept.data;
 	var shown = old ? JSON.stringify(old) : null;
 	if (old) {
 		try { render(old, false); } catch (e) { shown = null; }
@@ -92,10 +100,53 @@ function quick(action, extra, render, failed) {
 		if (shown) window.scrollTo(0, y);
 	}).catch(function (e) {
 		if (token !== screenToken) return;
-		// a phone that's set up wrong must say so, even with an old copy to show
-		if (!shown || /SECRET|SETUP|BAD_RESPONSE/.test(e.code || "")) failed(e);
-		else toast("Couldn't reach the Sheet: this is the copy from last time.");
+		// a phone that's set up wrong must say so, even with an old copy to show; anything else
+		// (no signal, Google sending an error page) leaves the copy up, saying how old it is
+		if (!shown || /SECRET|SETUP/.test(e.code || "")) failed(e);
+		else staleNote(kept.at);
 	});
+}
+
+/** A line at the top of the screen that stays: what's shown is a copy the Sheet hasn't confirmed. */
+function staleNote(at) {
+	var old = main.querySelector(".stale");
+	if (old) old.remove();
+	main.insertBefore(el("div", { class: "stale", role: "status" },
+		el("b", null, "Couldn't check the Sheet. "), "This is the copy from " + (at ? whenText(at) : "an earlier visit") + "; it may be out of date."), main.firstChild);
+}
+
+/** 1700000000000 -> "Mon 9 Nov, 18:02" (or "today, 18:02") */
+function whenText(ms) {
+	var d = new Date(ms);
+	var day = londonKey(d) === londonToday() ? "today" : d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "Europe/London" });
+	return day + ", " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/London" });
+}
+
+/** Today in London as "YYYY-MM-DD", from the phone's own clock (not from a kept copy). */
+function londonKey(d) {
+	try {
+		var parts = {};
+		new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d)
+			.forEach(function (p) { parts[p.type] = p.value; });
+		if (parts.year && parts.month && parts.day) return parts.year + "-" + parts.month + "-" + parts.day;
+	} catch (e) { /* an old browser: the phone's own time zone */ }
+	return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+function londonToday() { return londonKey(new Date()); }
+
+/**
+ * Which day is tonight, and which have gone, worked out here from each day's date: a kept copy
+ * of the week says "today" as it was when it was fetched, which could be days ago.
+ */
+function freshDays(w) {
+	if (!w || !w.days) return w;
+	if (w.servedToday === undefined) {
+		var t = w.days.filter(function (d) { return d.isToday; })[0];
+		w.servedToday = t ? t.key : null; // the day the Sheet called today (tonight's photo is for that day)
+	}
+	var today = londonToday();
+	w.days.forEach(function (d) { d.isToday = d.key === today; d.isPast = d.key < today; });
+	return w;
 }
 
 /** Fetches a few likely next screens in the background, at most every 10 minutes. */
@@ -105,7 +156,7 @@ function prefetch(w) {
 	lastPrefetch = Date.now();
 	var jobs = [["recipes", {}], ["shopping", { offset: shopOffset }]];
 	(w.days || []).forEach(function (d) {
-		if (d.isToday && d.dinner && d.dinner.recipeId) jobs.unshift(["recipe", { id: d.dinner.recipeId, day: d.key }]);
+		if (d.key === londonToday() && d.dinner && d.dinner.recipeId) jobs.unshift(["recipe", { id: d.dinner.recipeId, day: d.key }]);
 	});
 	jobs.forEach(function (j) {
 		call(j[0], j[1]).then(function (data) { storePut(storeKey(j[0], j[1]), data); }).catch(function () { /* try again later */ });
@@ -177,7 +228,7 @@ function photo(src, alt) {
 function icon(name) { return el("span", { html: ICONS[name], style: "display:inline-flex" }); }
 function chips(r, withCarbs) {
 	return el("div", { class: "chips" },
-		r.beth ? el("span", { class: "chip beth" }, badgeText()) : null,
+		r.marked ? el("span", { class: "chip marked" }, badgeText()) : null,
 		r.minutes ? el("span", { class: "chip" }, r.minutes + " min") : null,
 		(r.types || []).map(function (t) { return el("span", { class: "chip" }, TYPE_LABELS[t] || t); }),
 		withCarbs && r.carbsPer100g !== null && r.carbsPer100g !== undefined ? el("span", { class: "chip carbs" }, r.carbsPer100g + "g carbs per 100g") : null);
@@ -188,12 +239,12 @@ var TYPE_LABELS = { chicken: "Chicken", beef: "Beef", pork: "Pork", fish: "Fish"
 var TIMES = [0, 20, 30, 45];
 var NO_COOKING = ["Takeaway", "Out", "Leftovers"];
 
-function newFilter() { return { types: [], maxMin: 0, beth: false, noPhoto: false }; }
+function newFilter() { return { types: [], maxMin: 0, marked: false, noPhoto: false }; }
 
 function matchFilter(r, f) {
 	if (f.types.length && !(r.types || []).some(function (t) { return f.types.indexOf(t) !== -1; })) return false;
 	if (f.maxMin && !(r.minutes && r.minutes <= f.maxMin)) return false;
-	if (f.beth && !r.beth) return false;
+	if (f.marked && !r.marked) return false;
 	if (f.noPhoto && r.hasPhoto) return false;
 	return true;
 }
@@ -217,7 +268,7 @@ function filterBar(f, items, opts, onChange) {
 		var row = el("div", { class: "frow" },
 			el("button", { type: "button", class: "toggle fbtn", "aria-expanded": String(open), onclick: function () { open = !open; draw(); } },
 				"Filters" + (n ? " (" + n + ")" : ""), el("span", { class: "caret", "aria-hidden": "true" }, open ? "\u25b4" : "\u25be")),
-			toggle(badgeText(" only"), f.beth, function () { f.beth = !f.beth; }, "beth"),
+			toggle(badgeText(" only"), f.marked, function () { f.marked = !f.marked; }, "marked"),
 			opts.extra || null);
 		wrap.appendChild(row);
 		if (!open) return;
@@ -338,6 +389,7 @@ function show() {
 	if (current.name === "shopping") return screenShopping();
 	if (current.name === "plan") return screenPlan();
 	if (current.name === "settings") return screenSettings();
+	if (current.name === "setup") return screenSetupConfirm();
 	if (!getSettings().url) return screenSettings(true);
 	return screenWeek();
 }
@@ -374,8 +426,8 @@ function loadPlan(prefetch) {
 
 function loadWeek(force) {
 	if (!cache.week && !force) cache.week = storeGet(storeKey("week", { offset: 0 }));
-	if (cache.week && !force) return Promise.resolve(cache.week);
-	return call("week", { offset: 0 }).then(function (w) { cache.week = w; return w; });
+	if (cache.week && !force) return Promise.resolve(freshDays(cache.week));
+	return call("week", { offset: 0 }).then(function (w) { cache.week = freshDays(w); return w; });
 }
 
 function dayRow(d, w, compact) {
@@ -392,7 +444,7 @@ function dayRow(d, w, compact) {
 			d.isToday ? el("div", { class: "eyebrow", style: "font-size:13px" }, "Tonight") : null,
 			el("div", { class: "meal" }, label, din && din.kind === "other" ? el("span", { class: "small", style: "font-weight:400" }, " (no recipe)") : null),
 			d.isToday && din && din.recipeId ? chips(din, false) : null),
-		d.isToday && w.tonightPhoto && !compact ? photo(w.tonightPhoto) : null,
+		d.isToday && w.tonightPhoto && w.servedToday === d.key && !compact ? photo(w.tonightPhoto) : null,
 		!d.isToday && !d.isPast ? el("span", { class: "hint" }, din && din.recipeId ? "" : "Choose") : null);
 }
 
@@ -410,7 +462,7 @@ function screenWeek() {
 	loading(main);
 	var token = screenToken;
 	quick("week", { offset: 0 }, function (w) {
-		cache.week = w;
+		cache.week = freshDays(w);
 		if (current.name !== "week") return;
 		if (wide.matches) {
 			renderSide();
@@ -465,11 +517,20 @@ function screenRecipe(id, dayKey, inWeek) {
 		};
 		draw();
 		var day = r.day;
-		var whenText = day ? (day.isToday ? "Tonight" : day.label) : "";
+		if (day) day.isToday = day.key === londonToday();
+		// the calendar now has something else on that day (changed on another phone, or in Google Calendar)
+		var moved = day && r.dayDinner !== undefined && !(r.dayDinner && r.dayDinner.recipeId === r.id);
+		var dayLabel = day ? (day.isToday ? "Tonight" : day.label) : "";
+		var whenText = moved ? "" : dayLabel;
 		main.textContent = "";
 		add(main, [
 			!inWeek ? el("button", { type: "button", class: "back", onclick: back }, icon("back"), "Back") : null,
 			whenText ? el("div", { class: "eyebrow" }, whenText) : null,
+			moved ? el("div", { class: "notice", role: "alert" },
+				el("b", null, r.dayDinner ? (day.isToday ? "Tonight's" : day.label + "'s") + " dinner is now " + r.dayDinner.title + "." : "Nothing is planned for " + (day.isToday ? "tonight" : day.label) + " now."),
+				el("div", null, "This recipe isn't on that day any more."),
+				r.dayDinner && r.dayDinner.recipeId ? el("button", { type: "button", class: "btn primary", onclick: function () { go("recipe", { id: r.dayDinner.recipeId, day: day.key }, true); } }, "Open " + r.dayDinner.title) : null) : null,
+			(r.warnings || []).length ? el("div", { class: "notice", role: "alert" }, el("b", null, "Check the Sheet: "), r.warnings.join(" ")) : null,
 			el("div", { class: "rhead" },
 				el("div", { class: "words" }, el("h1", null, r.title), chips(r, true)),
 				r.photo ? photo(r.photo) : null),
@@ -492,16 +553,9 @@ function screenRecipe(id, dayKey, inWeek) {
 			el("div", { class: "stack" },
 				el("button", { type: "button", class: "btn", onclick: function () { go("edit", { id: r.id, day: day ? day.key : "" }); } }, icon("edit"), "Edit time, notes or photo"),
 				el("button", { type: "button", class: "btn", onclick: function () { window.print(); } }, icon("print"), "Print"),
-				day && (day.isToday || day.key > todayKey()) ? el("button", { type: "button", class: "btn primary", onclick: function () { go("swap", { day: day.key }); } }, icon("swap"), "Swap " + day.label + "'s dinner") : null)
+				day && !moved && day.key >= londonToday() ? el("button", { type: "button", class: "btn primary", onclick: function () { go("swap", { day: day.key }); } }, icon("swap"), "Swap " + day.label + "'s dinner") : null)
 		]);
 	}, function (e) { showError(main, e, function () { screenRecipe(id, dayKey, inWeek); }); });
-}
-
-function todayKey() {
-	var t = cache.week && cache.week.days.filter(function (d) { return d.isToday; })[0];
-	if (t) return t.key;
-	var d = new Date();
-	return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 }
 
 /* ---------------- quick edit ---------------- */
@@ -646,7 +700,7 @@ function pickCard(r, sub, onclick) {
 		r.photo ? photo(r.photo) : el("div", { class: "ph" }),
 		el("div", { class: "stack", style: "gap:3px;flex:1;min-width:0" },
 			el("div", { class: "t" }, r.title),
-			el("div", { class: "small muted" }, r.beth ? el("b", { style: "color:var(--beth)" }, badgeText(" \u00b7 ")) : null, sub)));
+			el("div", { class: "small muted" }, r.marked ? el("b", { style: "color:var(--mark)" }, badgeText(" \u00b7 ")) : null, sub)));
 }
 
 /* ---------------- plan next week ---------------- */
@@ -692,11 +746,27 @@ function screenPlan() {
 		if (!o.pool) throw new Error("The Sheet's script needs updating: paste the new App.gs and deploy a new version.");
 		var start = o.week.start;
 		var draft = loadDraft(start) || {};
-		var picks = draft.picks || {}; // day key -> { id, title, beth, minutes } or { text: "Burgers" }
+		var picks = draft.picks || {}; // day key -> { id, title, marked, minutes } or { text: "Burgers" }
 		var f = planFilter;
 		var pool = o.pool.map(function (x) { x.hasPhoto = Boolean(x.photo || x.sheetPhoto); return x; });
 		var fits = function () { return pool.filter(function (x) { return matchFilter(x, f); }); };
 		var shown = draft.shown && draft.shown.length ? draft.shown : drawPool(fits(), o.size, o.share, {});
+		// a kept draft can be days old: drop suggestions that can't be suggested now (had since,
+		// planned, or gone from the Sheet), refresh the rest, and top up from the pool
+		var inPool = {};
+		pool.forEach(function (x) { inPool[x.id] = x; });
+		var pickedIds = {};
+		Object.keys(picks).forEach(function (k) { if (picks[k].id) pickedIds[picks[k].id] = true; });
+		var before = shown.length;
+		shown = shown.filter(function (r) { return inPool[r.id] || pickedIds[r.id]; }).map(function (r) {
+			var x = inPool[r.id];
+			return x ? Object.assign({}, r, { title: x.title, minutes: x.minutes, marked: x.marked, types: x.types, photo: x.photo, sheetPhoto: x.sheetPhoto, hasPhoto: x.hasPhoto }) : r;
+		});
+		if (shown.length < before) {
+			var skipShown = {};
+			shown.forEach(function (r) { skipShown[r.id] = true; });
+			shown = shown.concat(drawPool(fits(), before - shown.length, o.share, skipShown));
+		}
 		var photos = {}; // id -> data URL, for photos kept in the Sheet
 		// nights that already have a dinner in the calendar can't be picked over
 		o.days.forEach(function (d) { if (d.dinner) delete picks[d.key]; });
@@ -732,7 +802,7 @@ function screenPlan() {
 			saveBtn.textContent = newPicks ? "Save the week (" + newPicks + " new)" : "Save the week";
 			cards.textContent = "";
 			var list = shown.filter(function (r) { return pickedDay(r.id) || matchFilter(r, f); });
-			if (!list.length) cards.appendChild(el("div", { class: "small muted" }, filterCount(f) || f.beth ? "No recipes fit these filters." : "No suggestions: everything was had recently."));
+			if (!list.length) cards.appendChild(el("div", { class: "small muted" }, filterCount(f) || f.marked ? "No recipes fit these filters." : "No suggestions: everything was had recently."));
 			list.forEach(function (r) {
 				var on = pickedDay(r.id);
 				var img = r.photo || photos[r.id];
@@ -741,7 +811,7 @@ function screenPlan() {
 					el("span", { class: "sc" },
 						el("span", { class: "t" }, r.title),
 						on ? el("span", { class: "small onday" }, "✓ On " + dayOf(on).dayName)
-							: el("span", { class: "small muted" }, r.beth ? el("b", { style: "color:var(--beth)" }, badgeText(" · ")) : null, (r.minutes ? r.minutes + " min · " : "") + (r.kind === "favourite" ? "favourite" : "surprise")))));
+							: el("span", { class: "small muted" }, r.marked ? el("b", { style: "color:var(--mark)" }, badgeText(" · ")) : null, (r.minutes ? r.minutes + " min · " : "") + (r.kind === "favourite" ? "favourite" : "surprise")))));
 			});
 		};
 		// photos kept in the Sheet arrive one by one
@@ -784,7 +854,7 @@ function screenPlan() {
 						el("h2", null, on ? "On " + dayOf(on).dayName : "Put it on"),
 						on ? el("button", { type: "button", class: "btn", onclick: function () { delete picks[on]; keep(); draw(); close(); } }, "Take it off " + dayOf(on).dayName)
 							: free.length ? el("div", { class: "daygrid" }, free.map(function (d) {
-								return el("button", { type: "button", onclick: function () { picks[d.key] = { id: r.id, title: r.title, beth: r.beth, minutes: r.minutes }; keep(); draw(); close(); toast(r.title + " on " + d.dayName); } }, d.label);
+								return el("button", { type: "button", onclick: function () { picks[d.key] = { id: r.id, title: r.title, marked: r.marked, minutes: r.minutes }; keep(); draw(); close(); toast(r.title + " on " + d.dayName); } }, d.label);
 							})) : el("div", { class: "small muted" }, "Every night is planned. Remove one with × to make room.")),
 					el("button", { type: "button", class: "btn", onclick: function () { close(); go("recipe", { id: r.id }); } }, icon("open"), "Open the full recipe")));
 			document.body.appendChild(overlay);
@@ -823,7 +893,11 @@ function screenPlan() {
 			call("savePlan", { picks: list }).then(function (res) {
 				saveDraft(start, null);
 				changed();
-				toast(res.saved.length + " dinner" + (res.saved.length === 1 ? "" : "s") + " saved" + (res.skipped.length ? ". " + res.skipped.length + " night" + (res.skipped.length === 1 ? " was" : "s were") + " already taken" : ""));
+				var gone = res.skipped.filter(function (x) { return x.gone; }).length;
+				var taken = res.skipped.length - gone;
+				toast(res.saved.length + " dinner" + (res.saved.length === 1 ? "" : "s") + " saved" +
+					(taken ? ". " + taken + " night" + (taken === 1 ? " was" : "s were") + " already taken" : "") +
+					(gone ? ". " + gone + " recipe" + (gone === 1 ? " isn't" : "s aren't") + " in the Sheet any more, so " + (gone === 1 ? "its night was" : "their nights were") + " left empty" : ""));
 				go("plan", {}, true);
 			}).catch(function (e) { toast(e.message); draw(); });
 		});
@@ -886,7 +960,7 @@ function screenRecipes() {
 						freq ? el("span", { class: "small muted" }, freq) : null),
 					el("span", { class: "small muted meta" },
 						r.hasPhoto ? el("span", { class: "cam", title: "Has a photo", "aria-label": "Has a photo", role: "img", html: ICONS.camera }) : null,
-						r.beth ? el("b", { style: "color:var(--beth)" }, badgeText("")) : null,
+						r.marked ? el("b", { style: "color:var(--mark)" }, badgeText("")) : null,
 						r.minutes ? el("span", null, r.minutes + " min") : null)));
 			});
 		};
@@ -919,7 +993,12 @@ function screenShopping() {
 	var syncSheet = null; // saves the list to the Sheet if it differs from what the Sheet has
 	quick("shopping", { offset: shopOffset }, function (s, fresh) {
 		if (current.name !== "shopping" || (fresh && touched)) return;
-		var state = { unticked: s.saved.unticked.slice(), ticked: (s.saved.ticked || []).slice(), added: s.saved.added.slice() };
+		// what the Sheet had (s.saved) plus the changes made here since (s.pending), in order
+		var pending = (s.pending || []).slice();
+		var base = s.saved.sig; // the Sheet's list these changes were made on
+		var stateOf = function (saved) { return { unticked: saved.unticked.slice(), ticked: (saved.ticked || []).slice(), added: saved.added.slice() }; };
+		var state = stateOf(s.saved);
+		pending.forEach(function (op) { applyShopChange(state, op); });
 		var known = {};
 		(s.known || []).forEach(function (k) { known[FridgeShop.itemKey(k[0])] = k[1]; });
 		var sectionNames = s.sections.map(function (x) { return x.name; });
@@ -947,38 +1026,63 @@ function screenShopping() {
 			return rows;
 		};
 		var sigOf = function (rows) { return rows.map(function (x) { return [x.item, x.qty, x.buy ? 1 : 0].join("|"); }).join("\n"); };
-		var save = function (now) {
-			touched = touched || !now;
-			var rows = rowsToSave();
-			// keep this phone's copy up to date, so coming back shows the list as you left it
-			s.saved = { any: true, unticked: state.unticked.slice(), ticked: state.ticked.slice(), added: state.added.slice(), sig: sigOf(rows) };
+		// keep this phone's copy up to date (with the changes not saved yet), so coming back shows
+		// the list as you left it, even if the Sheet couldn't be reached
+		var keepCopy = function () {
+			s.pending = pending.slice();
+			s.saved.sig = base;
 			storePut(storeAt, s);
 			mine = s;
+		};
+		var sending = false, again = false, tries = 0;
+		var send = function () {
+			if (sending) { again = true; return; }
+			sending = true;
+			var rows = rowsToSave();
+			var sent = pending.length;
+			call("shopSave", { week: s.week.start, rows: rows, base: base }).then(function (res) {
+				sending = false;
+				if (res && res.conflict) {
+					// another phone saved first: start from what the Sheet has now, put this phone's
+					// changes on top, and save that (so neither phone's changes are lost)
+					if (++tries > 3) { toast("The list wasn't saved: another phone keeps changing it. Open the list again."); return; }
+					s.saved = res.saved;
+					base = res.saved.sig;
+					state = stateOf(res.saved);
+					pending.forEach(function (op) { applyShopChange(state, op); });
+					draw(); keepCopy(); send();
+					return;
+				}
+				tries = 0;
+				pending = pending.slice(sent);
+				base = res && typeof res.sig === "string" ? res.sig : sigOf(rows);
+				s.saved = { any: true, unticked: state.unticked.slice(), ticked: state.ticked.slice(), added: state.added.slice(), sig: base };
+				keepCopy();
+				if (again) { again = false; send(); }
+			}).catch(function (e) {
+				sending = false;
+				toast("The list wasn't saved: " + e.message);
+			});
+		};
+		var save = function (now) {
+			touched = touched || !now;
+			keepCopy();
 			clearTimeout(saveTimer);
-			saveTimer = setTimeout(function () {
-				call("shopSave", { week: s.week.start, rows: rowsToSave() }).catch(function (e) { toast("The list wasn't saved: " + e.message); });
-			}, now ? 0 : 900);
+			saveTimer = setTimeout(send, now ? 0 : 900);
+		};
+		var change = function (op) {
+			pending.push(op);
+			applyShopChange(state, op);
+			draw(); save();
 		};
 		var onList = function (key) { return list.groups.some(function (g) { return g.items.some(function (x) { return x.key === key; }); }); };
-		var toggle = function (x) {
-			var other = function (n) { return FridgeShop.itemKey(n) !== x.key; };
-			state.unticked = state.unticked.filter(other);
-			state.ticked = state.ticked.filter(other);
-			if (x.ticked) state.unticked.push(x.name);
-			else state.ticked.push(x.name);
-			draw(); save();
-		};
+		var toggle = function (x) { change({ op: x.ticked ? "untick" : "tick", item: x.name }); };
 		var removeAdded = function (x) {
-			state.added = state.added.filter(function (a) { return FridgeShop.itemKey(a.item) !== x.key; });
-			draw(); save();
+			change({ op: "remove", item: x.name });
 			toast(x.name + " taken off");
 		};
 		var addItem = function (item, section) {
-			var key = FridgeShop.itemKey(item);
-			state.unticked = state.unticked.filter(function (n) { return FridgeShop.itemKey(n) !== key; });
-			if (state.ticked.every(function (n) { return FridgeShop.itemKey(n) !== key; })) state.ticked.push(item);
-			if (!state.added.some(function (a) { return FridgeShop.itemKey(a.item) === key; })) state.added.push({ item: item, qty: "", section: section });
-			draw(); save();
+			change({ op: "add", item: item, section: section });
 			toast(item + " added to " + section);
 		};
 
@@ -1111,11 +1215,29 @@ function screenShopping() {
 			printBar
 		]);
 		// the Sheet's Shopping list tab follows the list, if it has changed (new dinners, new regulars)
-		syncSheet = function () { if (sigOf(rowsToSave()) !== s.saved.sig) save(true); };
+		syncSheet = function () { if (pending.length || sigOf(rowsToSave()) !== base) save(true); };
 	}, function (e) { showError(main, e, screenShopping); }).then(function () {
 		if (touched && mine) storePut(storeAt, mine); // the Sheet's answer was from before your changes
 		else if (syncSheet && current.name === "shopping") syncSheet();
 	});
+}
+
+/** One change to the shopping list, on its state: tick, untick, add or remove (an added thing). */
+function applyShopChange(state, op) {
+	var key = FridgeShop.itemKey(op.item);
+	var other = function (n) { return FridgeShop.itemKey(n) !== key; };
+	if (op.op === "tick" || op.op === "untick") {
+		state.unticked = state.unticked.filter(other);
+		state.ticked = state.ticked.filter(other);
+		(op.op === "untick" ? state.unticked : state.ticked).push(op.item);
+	} else if (op.op === "add") {
+		state.unticked = state.unticked.filter(other);
+		if (state.ticked.every(other)) state.ticked.push(op.item);
+		if (!state.added.some(function (a) { return FridgeShop.itemKey(a.item) === key; })) state.added.push({ item: op.item, qty: "", section: op.section });
+	} else if (op.op === "remove") {
+		state.added = state.added.filter(function (a) { return FridgeShop.itemKey(a.item) !== key; });
+	}
+	return state;
 }
 
 /* ---------------- settings ---------------- */
@@ -1149,35 +1271,85 @@ function screenSettings(first) {
 	]);
 }
 
-/** A setup link: #setup=<base64 of {url, secret}>. Stored on this phone, then removed from the address. */
+/** An Apps Script web app's address (or the test server's): nothing else gets this phone's secret. */
+var WEB_APP_URL = /^(?:https:\/\/script\.google\.com\/(?:a\/macros\/[A-Za-z0-9.-]+|macros)\/s\/[A-Za-z0-9_-]{20,}\/exec|http:\/\/localhost:\d+\/exec)$/;
+var pendingSetup = null; // a setup link for a different Sheet, waiting for "Use the new link"
+
+/**
+ * A setup link: #setup=<base64 of {url, secret}>, then removed from the address.
+ * Returns "saved", "same" (already set up like that), "ask" (this phone is set up for another
+ * Sheet: the person chooses), "bad" (not a setup link this app can use) or false (no link).
+ */
 function takeSetupLink() {
 	var m = /[#&]setup=([A-Za-z0-9_-]+)/.exec(location.hash);
 	if (!m) return false;
+	var result = "bad";
 	try {
 		var b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
 		while (b64.length % 4) b64 += "=";
 		var v = JSON.parse(atob(b64));
-		if (v && /^(https:\/\/script\.google\.com\/|http:\/\/localhost:)/.test(v.url) && v.secret) {
-			saveSettings({ url: v.url, secret: v.secret });
-			setTimeout(function () { toast("This phone is set up. Add it to your home screen."); }, 300);
+		if (v && typeof v.url === "string" && WEB_APP_URL.test(v.url) && typeof v.secret === "string" && v.secret) {
+			var now = getSettings();
+			if (now.url === v.url && now.secret === v.secret) result = "same";
+			else if (now.url && now.secret) { pendingSetup = { url: v.url, secret: v.secret }; result = "ask"; }
+			else {
+				saveSettings({ url: v.url, secret: v.secret });
+				setTimeout(function () { toast("This phone is set up. Add it to your home screen."); }, 300);
+				result = "saved";
+			}
 		}
 	} catch (e) { /* not a valid link */ }
+	if (result === "bad") setTimeout(function () { toast("That setup link isn't right. Make a new one in the Sheet: Fridge > Phone app setup link."); }, 300);
 	try { history.replaceState(null, "", location.pathname); } catch (e) { /* ignore */ }
-	return true;
+	return result;
+}
+
+/** The last few letters of a web app's address, to tell two apart. */
+function shortUrl(url) {
+	var m = /\/s\/([A-Za-z0-9_-]+)\/exec/.exec(url || "");
+	return m ? "\u2026" + m[1].slice(-6) : url;
+}
+
+function screenSetupConfirm() {
+	var v = pendingSetup;
+	if (!v) return go("week", {}, true);
+	var now = getSettings();
+	main.textContent = "";
+	add(main, [
+		el("h1", null, "Use this setup link?"),
+		el("p", null, "This phone is already set up for a Sheet (web app ", el("b", null, shortUrl(now.url)), "). The link you opened is for ",
+			now.url === v.url ? "the same web app with a new secret." : el("span", null, "a different one (", el("b", null, shortUrl(v.url)), ")."),
+			" Only use it if it came from you, from Fridge > Phone app setup link in the Sheet."),
+		el("div", { class: "stack" },
+			el("button", { type: "button", class: "btn primary", onclick: function () {
+				saveSettings({ url: v.url, secret: v.secret });
+				pendingSetup = null;
+				storeForget(); changed();
+				toast("This phone is set up with the new link.");
+				go("week", {}, true);
+			} }, "Use the new link"),
+			el("button", { type: "button", class: "btn", onclick: function () { pendingSetup = null; go("week", {}, true); } }, "Keep the current setup"))
+	]);
 }
 
 /* ---------------- start ---------------- */
 function parseHash(hash) {
 	var m = /^#?([a-z]+)(?:\?(.*))?$/.exec(hash || "");
 	var args = {};
-	if (m && m[2]) m[2].split("&").forEach(function (p) { var kv = p.split("="); args[kv[0]] = decodeURIComponent(kv[1] || ""); });
+	try {
+		if (m && m[2]) m[2].split("&").forEach(function (p) { var kv = p.split("="); args[kv[0]] = decodeURIComponent(kv[1] || ""); });
+	} catch (e) {
+		return { name: "week", args: {} }; // a damaged link (cut short, say): start at the week
+	}
 	return { name: m ? m[1] : "week", args: args };
 }
 // a setup link opened while the app is already open in this tab
 window.addEventListener("hashchange", function () {
-	if (/[#&]setup=/.test(location.hash) && takeSetupLink()) { storeForget(); changed(); go("week", {}, true); }
+	if (!/[#&]setup=/.test(location.hash)) return;
+	var got = takeSetupLink();
+	if (got === "saved") { storeForget(); changed(); go("week", {}, true); }
+	else if (got === "ask") go("setup", {}, true);
 });
-takeSetupLink();
-var first = parseHash(location.hash);
+var first = takeSetupLink() === "ask" ? { name: "setup", args: {} } : parseHash(location.hash);
 go(first.name, first.args, true);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(function () { /* fine without */ });
