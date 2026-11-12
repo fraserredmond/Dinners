@@ -1005,7 +1005,7 @@ function screenPlan() {
 					el("span", { class: "sc" },
 						el("span", { class: "t" }, r.title),
 						on ? el("span", { class: "small onday" }, "✓ On " + dayOf(on).dayName)
-							: el("span", { class: "small muted" }, r.marked ? el("b", { style: "color:var(--mark)" }, badgeText(" · ")) : null, (r.minutes ? r.minutes + " min · " : "") + (r.kind === "favourite" ? "favourite" : "surprise")))));
+							: el("span", { class: "small muted" }, r.marked ? el("b", { style: "color:var(--mark)" }, badgeText(" · ")) : null, (r.minutes ? r.minutes + " min · " : "") + (r.kind === "favourite" ? "favourite" : "random")))));
 			});
 		};
 		// photos kept in the Sheet arrive one by one
