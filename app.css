@@ -230,3 +230,29 @@ textarea.field { height: auto; padding: 10px 12px; line-height: 1.4; resize: ver
 .stale { background: var(--accentbg); color: var(--accenttext); border-radius: 12px; padding: 10px 12px; font-size: 15px; line-height: 1.35; }
 .notice { background: var(--accentbg); border: 2px solid var(--accent); color: var(--text); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 @media print { .stale, .notice { display: none; } }
+
+/* the spinner, top right, while the Sheet or calendar is being asked: high in the corner, on a
+   small disc so it stays clear over text scrolling under it */
+#busy { position: fixed; top: calc(env(safe-area-inset-top, 0px) + 4px); right: 8px; z-index: 30; width: 28px; height: 28px; padding: 3px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15); pointer-events: none; }
+#busy[hidden] { display: none; }
+body.withcog #busy { right: 60px; } /* the week screen's settings cog is in that corner */
+@media (min-width: 1000px) { body.withcog #busy { right: 4px; } }
+#busy .spin { display: block; width: 22px; height: 22px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--text); animation: busyspin 0.8s linear infinite; box-sizing: border-box; }
+@keyframes busyspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #busy .spin { animation-duration: 2.4s; } }
+@media (min-width: 1000px) { #busy { top: 24px; right: 4px; background: var(--panel); box-shadow: none; } }
+@media print { #busy { display: none !important; } }
+/* earlier weeks */
+.weeknav { display: flex; justify-content: space-between; gap: 12px; }
+.sidehead.row .linkbtn { text-transform: none; letter-spacing: 0; font-size: 15px; padding: 0; }
+/* an earlier week: days with a recipe look tappable */
+.days.pastweek .day.past.hasrecipe { background: var(--panel); border-color: var(--line); color: var(--text); }
+.sidehead.row .linkbtn { white-space: nowrap; flex: none; }
+
+/* dragging a night onto another */
+.draggable { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.draggable.lifted { opacity: 0.35; }
+.draggable.droptarget { outline: 3px dashed var(--accent); outline-offset: 2px; }
+.dragghost { position: fixed; z-index: 40; margin: 0; pointer-events: none; transform: scale(1.03); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22); }
+body.dragging, body.dragging * { cursor: grabbing !important; }
+.night.dragghost { background: var(--panel); border-radius: 12px; padding: 11px 12px; border-bottom: none; }

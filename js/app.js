@@ -17,7 +17,30 @@ var badgeName = "";
  * Asks the Sheet's web app for something: a POST with a text/plain JSON body,
  * which keeps the browser from sending a CORS preflight that Apps Script can't answer.
  */
-function call(action, extra) {
+/* the spinner in the top-right corner: shown while the Sheet or calendar is being asked */
+var busyCount = 0, busyTimer = null;
+function busyTrack(promise) {
+	var el = document.getElementById("busy");
+	busyCount++;
+	if (el && busyCount === 1) {
+		clearTimeout(busyTimer);
+		busyTimer = setTimeout(function () { if (busyCount > 0) el.hidden = false; }, 150); // not for a blink
+	}
+	var done = function () {
+		busyCount = Math.max(0, busyCount - 1);
+		if (el && busyCount === 0) { clearTimeout(busyTimer); el.hidden = true; }
+	};
+	promise.then(done, done);
+	return promise;
+}
+
+/** Asks the Sheet. opts.quiet: work in the background (getting screens ready), so no spinner. */
+function call(action, extra, opts) {
+	if (!(opts && opts.quiet)) return busyTrack(callSheet(action, extra));
+	return callSheet(action, extra);
+}
+
+function callSheet(action, extra) {
 	var s = getSettings();
 	if (!s.url || !s.secret) return Promise.reject(Object.assign(new Error("This phone isn't set up yet."), { code: "NO_SETUP" }));
 	var body = Object.assign({ secret: s.secret, action: action }, extra || {});
@@ -159,7 +182,7 @@ function prefetch(w) {
 		if (d.key === londonToday() && d.dinner && d.dinner.recipeId) jobs.unshift(["recipe", { id: d.dinner.recipeId, day: d.key }]);
 	});
 	jobs.forEach(function (j) {
-		call(j[0], j[1]).then(function (data) { storePut(storeKey(j[0], j[1]), data); }).catch(function () { /* try again later */ });
+		call(j[0], j[1], { quiet: true }).then(function (data) { storePut(storeKey(j[0], j[1]), data); }).catch(function () { /* try again later */ });
 	});
 }
 
@@ -376,6 +399,7 @@ function show() {
 	main.classList.toggle("plain", false);
 	main.style.opacity = ""; // a save dims the screen while it works
 	document.body.classList.remove("shopping");
+	document.body.classList.toggle("withcog", current.name === "week" && !(Number(current.args.offset) < 0));
 	var paper = document.getElementById("printsheet");
 	if (paper) paper.remove();
 	window.scrollTo(0, 0);
@@ -391,7 +415,7 @@ function show() {
 	if (current.name === "settings") return screenSettings();
 	if (current.name === "setup") return screenSetupConfirm();
 	if (!getSettings().url) return screenSettings(true);
-	return screenWeek();
+	return screenWeek(Math.max(-26, Math.min(0, Math.round(Number(a.offset) || 0))));
 }
 // Printing lays the page out at paper width, which can cross the laptop/phone line: don't redraw
 // then, or the page being printed is swapped for a half-drawn one (a blank printout).
@@ -418,7 +442,7 @@ var PLAN_FRESH_MS = 5 * 60 * 1000;
 function loadPlan(prefetch) {
 	if (cache.plan && Date.now() - cache.plan.at < PLAN_FRESH_MS) return cache.plan.promise;
 	if (prefetch && !navigator.onLine) return null;
-	var entry = { at: Date.now(), promise: call("planOptions", { exclude: [] }) };
+	var entry = { at: Date.now(), promise: call("planOptions", { exclude: [] }, { quiet: prefetch }) };
 	entry.promise.catch(function () { if (cache.plan === entry) cache.plan = null; });
 	cache.plan = entry;
 	return entry.promise;
@@ -432,13 +456,13 @@ function loadWeek(force) {
 
 function dayRow(d, w, compact) {
 	var din = d.dinner;
-	var cls = "day" + (d.isToday ? " today" : d.isPast ? " past" : "") + (!din ? " empty" : din.kind === "nocook" ? " nocook" : "");
+	var cls = "day" + (d.isToday ? " today" : d.isPast ? " past" : "") + (!din ? " empty" : din.kind === "nocook" ? " nocook" : "") + (din && din.recipeId ? " hasrecipe" : "");
 	var open = function () {
 		if (din && din.recipeId) go("recipe", { id: din.recipeId, day: d.key });
 		else if (!d.isPast) go("swap", { day: d.key });
 	};
 	var label = !din ? (d.isPast ? "\u2014" : "Nothing planned") : din.title;
-	return el("button", { type: "button", class: cls, onclick: open, disabled: d.isPast && !(din && din.recipeId) ? true : null },
+	return el("button", { type: "button", class: cls + (d.isPast ? "" : " draggable"), "data-key": d.key, onclick: open, disabled: d.isPast && !(din && din.recipeId) ? true : null },
 		el("div", { class: "when" }, el("b", null, d.dow), el("br"), d.num),
 		el("div", { class: "what" },
 			d.isToday ? el("div", { class: "eyebrow", style: "font-size:13px" }, "Tonight") : null,
@@ -448,17 +472,163 @@ function dayRow(d, w, compact) {
 		!d.isToday && !d.isPast ? el("span", { class: "hint" }, din && din.recipeId ? "" : "Choose") : null);
 }
 
-function weekList(w, compact) {
-	return el("div", { class: "days" }, w.days.map(function (d) { return dayRow(d, w, compact); }),
-		el("button", { type: "button", class: "next", onclick: function () { go("plan"); } },
+/* ---------------- drag a night onto another to swap them ----------------
+ * Press and hold a row (or drag it with a mouse), move it onto another row and let go.
+ * Rows need data-key and the class "draggable". A tap still opens the row as usual. */
+var dragging = null; // the drag in progress, if any: { list, row, on, target, lift(), follow(), stop(swap) }
+document.addEventListener("touchmove", function (e) { if (dragging && dragging.on) e.preventDefault(); }, { passive: false });
+window.addEventListener("pointermove", function (e) {
+	var d = dragging;
+	if (!d) return;
+	d.x = e.clientX; d.y = e.clientY;
+	var moved = Math.abs(d.x - d.x0) + Math.abs(d.y - d.y0);
+	if (!d.on) {
+		if (d.mouse && moved > 6) d.lift();
+		else if (!d.mouse && moved > 10) d.stop(false); // a scroll, not a hold
+		return;
+	}
+	e.preventDefault();
+	d.follow();
+});
+window.addEventListener("pointerup", function () { if (dragging) dragging.stop(true); });
+window.addEventListener("pointercancel", function () { if (dragging) dragging.stop(false); });
+window.addEventListener("keydown", function (e) { if (e.key === "Escape" && dragging) dragging.stop(false); });
+
+function dragToSwap(list, onSwap) {
+	var HOLD_MS = 350;
+	var rowAt = function (x, y) {
+		var hit = document.elementFromPoint(x, y);
+		var row = hit && hit.closest && hit.closest(".draggable");
+		return row && list.contains(row) ? row : null;
+	};
+	var stop = function (swap) {
+		var d = dragging;
+		if (!d || d.list !== list) return;
+		clearTimeout(d.timer);
+		cancelAnimationFrame(d.raf);
+		if (d.ghost) d.ghost.remove();
+		d.row.classList.remove("lifted");
+		if (d.target) d.target.classList.remove("droptarget");
+		document.body.classList.remove("dragging");
+		dragging = null;
+		if (d.on) {
+			// the press that ended a drag isn't a tap
+			var eat = function (e) { e.preventDefault(); e.stopPropagation(); };
+			list.addEventListener("click", eat, true);
+			setTimeout(function () { list.removeEventListener("click", eat, true); }, 400);
+		}
+		if (swap && d.on && d.target) onSwap(d.row.getAttribute("data-key"), d.target.getAttribute("data-key"));
+	};
+	var lift = function () {
+		var d = dragging;
+		if (!d || d.on) return;
+		d.on = true;
+		var r = d.row.getBoundingClientRect();
+		d.offsetY = d.y - r.top;
+		d.ghost = d.row.cloneNode(true);
+		d.ghost.classList.add("dragghost");
+		d.ghost.removeAttribute("id");
+		d.ghost.setAttribute("aria-hidden", "true");
+		d.ghost.style.left = r.left + "px";
+		d.ghost.style.top = r.top + "px";
+		d.ghost.style.width = r.width + "px";
+		document.body.appendChild(d.ghost);
+		d.row.classList.add("lifted");
+		document.body.classList.add("dragging");
+		if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) { /* no buzz */ } }
+		// scroll when held near the top or bottom of the screen
+		var edge = function () {
+			if (!dragging || !dragging.on) return;
+			var dy = d.y < 80 ? -8 : d.y > window.innerHeight - 110 ? 8 : 0;
+			if (dy) { window.scrollBy(0, dy); follow(); }
+			d.raf = requestAnimationFrame(edge);
+		};
+		d.raf = requestAnimationFrame(edge);
+		follow();
+	};
+	var follow = function () {
+		var d = dragging;
+		d.ghost.style.top = (d.y - d.offsetY) + "px";
+		var t = rowAt(d.x, d.y);
+		if (t === d.row) t = null;
+		if (t !== d.target) {
+			if (d.target) d.target.classList.remove("droptarget");
+			if (t) t.classList.add("droptarget");
+			d.target = t;
+		}
+	};
+	list.addEventListener("pointerdown", function (e) {
+		if (dragging || (e.pointerType === "mouse" && e.button !== 0)) return;
+		var row = e.target.closest(".draggable");
+		if (!row || !list.contains(row)) return;
+		var inner = e.target.closest("button, input, a");
+		if (inner && inner !== row) return; // the × and Other… buttons inside a row
+		dragging = { list: list, row: row, x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, mouse: e.pointerType === "mouse", on: false, target: null, lift: lift, follow: follow, stop: stop };
+		if (!dragging.mouse) dragging.timer = setTimeout(lift, HOLD_MS);
+	});
+	list.addEventListener("contextmenu", function (e) { if (dragging) e.preventDefault(); });
+	return list;
+}
+
+/** Swaps two nights this week: shown at once, then saved to the calendar. */
+function swapWeekDays(w, keyA, keyB) {
+	var a = w.days.filter(function (d) { return d.key === keyA; })[0];
+	var b = w.days.filter(function (d) { return d.key === keyB; })[0];
+	if (!a || !b || a.isPast || b.isPast || (!a.dinner && !b.dinner)) return;
+	var name = function (d) { return d.dow + " " + d.num; };
+	var t = a.dinner; a.dinner = b.dinner; b.dinner = t;
+	if (a.isToday || b.isToday) w.tonightPhoto = null; // tonight's photo was the other dinner's
+	var redraw = function () { cache.week = w; storePut(storeKey("week", { offset: 0 }), w); show(); };
+	redraw();
+	call("swapDays", { dayA: keyA, dayB: keyB }).then(function () {
+		changed();
+		redraw();
+		toast("Swapped " + name(a) + " and " + name(b));
+	}).catch(function (e) {
+		changed();
+		show();
+		toast("The swap wasn't saved: " + e.message);
+	});
+}
+
+function weekList(w, compact, past) {
+	var days = el("div", { class: "days" + (past ? " pastweek" : "") }, w.days.map(function (d) { return dayRow(d, w, compact); }),
+		past ? null : el("button", { type: "button", class: "next", onclick: function () { go("plan"); } },
 			el("span", { class: "row", style: "width:100%" },
 				el("span", { class: "stack", style: "gap:2px" },
 					el("b", null, w.nextWeek.planned >= 7 ? "Next week is planned" : w.nextWeek.planned ? "Next week: " + w.nextWeek.planned + " of 7 nights planned" : "Next week isn't planned yet"),
 					el("span", { class: "small muted" }, w.nextWeek.range)),
 				el("span", { class: "planbtn" }, w.nextWeek.planned >= 7 ? "See it" : "Plan"))));
+	return past ? days : dragToSwap(days, function (a, b) { swapWeekDays(w, a, b); });
 }
 
-function screenWeek() {
+/** "Last week", "3 weeks ago"... and buttons to step back and forward through earlier weeks. */
+function pastWeekNav(offset) {
+	return el("div", { class: "weeknav" },
+		el("button", { type: "button", class: "linkbtn", onclick: function () { go("week", { offset: offset - 1 }, true); } }, "\u2039 Week before"),
+		el("button", { type: "button", class: "linkbtn", onclick: function () { go("week", offset + 1 < 0 ? { offset: offset + 1 } : {}, true); } },
+			offset + 1 < 0 ? "Week after \u203a" : "This week \u203a"));
+}
+
+/** An earlier week's dinners, to look back at what you had and open its recipes. */
+function screenPastWeek(offset) {
+	loading(main);
+	quick("week", { offset: offset }, function (w) {
+		freshDays(w);
+		if (current.name !== "week") return;
+		main.textContent = "";
+		add(main, [
+			el("div", { class: "stack", style: "gap:4px" },
+				el("div", { class: "eyebrow" }, offset === -1 ? "Last week" : -offset + " weeks ago"),
+				el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Dinners"), el("span", { class: "small muted" }, w.range))),
+			pastWeekNav(offset),
+			weekList(w, false, true)
+		]);
+	}, function (e) { showError(main, e, function () { screenPastWeek(offset); }); });
+}
+
+function screenWeek(offset) {
+	if (offset < 0) return screenPastWeek(offset);
 	loading(main);
 	var token = screenToken;
 	quick("week", { offset: 0 }, function (w) {
@@ -476,7 +646,8 @@ function screenWeek() {
 		add(main, [
 			el("div", { class: "stack", style: "gap:4px" },
 				el("div", { class: "eyebrow" }, "This week"),
-				el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Dinners"), el("span", { class: "small muted" }, w.range))),
+				el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Dinners"), el("span", { class: "small muted" }, w.range)),
+				el("button", { type: "button", class: "linkbtn", onclick: function () { go("week", { offset: -1 }); } }, "\u2039 Last week")),
 			el("button", { type: "button", class: "cog", "aria-label": "Settings", onclick: function () { go("settings"); }, html: ICONS.cog }),
 			weekList(w, false)
 		]);
@@ -492,7 +663,8 @@ function screenWeek() {
 function renderSide() {
 	loadWeek(false).then(function (w) {
 		side.textContent = "";
-		add(side, [el("div", { class: "sidehead" }, "This week \u00b7 " + w.range), weekList(w, true)]);
+		add(side, [el("div", { class: "row sidehead" }, el("span", null, "This week \u00b7 " + w.range),
+			el("button", { type: "button", class: "linkbtn", onclick: function () { go("week", { offset: -1 }); } }, "\u2039 Last week")), weekList(w, true)]);
 	}).catch(function () { side.textContent = ""; });
 }
 
@@ -742,7 +914,7 @@ function screenPlan() {
 	var ready = cache.plan && Date.now() - cache.plan.at < PLAN_FRESH_MS;
 	loading(main);
 	if (!ready) main.querySelector(".loading").textContent = "Finding suggestions…";
-	loadPlan(false).then(function (o) {
+	busyTrack(loadPlan(false)).then(function (o) {
 		if (!o.pool) throw new Error("The Sheet's script needs updating: paste the new App.gs and deploy a new version.");
 		var start = o.week.start;
 		var draft = loadDraft(start) || {};
@@ -771,8 +943,30 @@ function screenPlan() {
 		// nights that already have a dinner in the calendar can't be picked over
 		o.days.forEach(function (d) { if (d.dinner) delete picks[d.key]; });
 		var keep = function () { saveDraft(start, { picks: picks, shown: shown }); };
+		// drag a night onto another to swap them; dinners already in the calendar move there too
+		var swapNights = function (keyA, keyB) {
+			var a = o.days.filter(function (d) { return d.key === keyA; })[0];
+			var b = o.days.filter(function (d) { return d.key === keyB; })[0];
+			if (!a || !b || (!a.dinner && !b.dinner && !picks[keyA] && !picks[keyB])) return;
+			var flip = function () {
+				var t = a.dinner; a.dinner = b.dinner; b.dinner = t;
+				var p = picks[keyA]; if (picks[keyB]) picks[keyA] = picks[keyB]; else delete picks[keyA];
+				if (p) picks[keyB] = p; else delete picks[keyB];
+				keep(); draw();
+			};
+			flip();
+			if (!a.dinner && !b.dinner) { toast("Swapped " + a.dayName + " and " + b.dayName); return; }
+			call("swapDays", { dayA: keyA, dayB: keyB }).then(function () {
+				changed();
+				toast("Swapped " + a.dayName + " and " + b.dayName + " (in the calendar too)");
+			}).catch(function (e) {
+				flip(); // back as it was
+				toast("The swap wasn't saved: " + e.message);
+			});
+		};
 
 		var nights = el("div", { class: "list nights" });
+		dragToSwap(nights, function (a, b) { swapNights(a, b); });
 		var cards = el("div", { class: "scards" });
 		var count = el("span", { class: "small muted" });
 		var saveBtn = el("button", { type: "button", class: "btn primary" }, "Save the week");
@@ -789,7 +983,7 @@ function screenPlan() {
 			o.days.forEach(function (d) {
 				var p = picks[d.key];
 				if (d.dinner || p) planned++;
-				nights.appendChild(el("div", { class: "night" + (d.dinner ? " fixed" : p ? " picked" : " free") },
+				nights.appendChild(el("div", { class: "night draggable" + (d.dinner ? " fixed" : p ? " picked" : " free"), "data-key": d.key },
 					el("b", { class: "nd" }, d.label),
 					el("span", { class: "nt" }, d.dinner ? d.dinner.title : p ? p.title || p.text : "Pick from below"),
 					d.dinner ? el("span", { class: "small muted" }, "in calendar")

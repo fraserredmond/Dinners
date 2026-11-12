@@ -2,7 +2,7 @@
 // the cache answers when the phone is offline. Bump CACHE_VERSION on each release.
 // Only the app's own files are cached here. (The app keeps its own copies of the Sheet's answers,
 // and its photos in the "dinners-photos" cache, which this leaves alone.)
-const CACHE_VERSION = "dinners-v11";
+const CACHE_VERSION = "dinners-v13";
 const SLOW_MS = 3000; // on a weak signal, the stored copy after this long (the network still updates it)
 const SHELL = ["./", "./index.html", "./app.css", "./manifest.json", "./js/app.js", "./js/scale.js", "./js/shop.js", "./icons/icon.svg", "./icons/icon-192.png", "./icons/icon-512.png"];
 
