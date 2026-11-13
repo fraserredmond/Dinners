@@ -74,6 +74,17 @@
 		return out.join(", ");
 	}
 
+	/** An amount you set yourself ("1", "x2", "1kg bag"): as the label shows it, and for the Qty column. */
+	function ownLabel(name, own) {
+		const n = countOf(own);
+		if (n === null) return name + " (" + own + ")";
+		return n > 1 ? name + " \u00d7" + n : name;
+	}
+	function ownQty(own) {
+		const n = countOf(own);
+		return n === null ? own : n > 1 ? "\u00d7" + n : "";
+	}
+
 	/** Only a spoonful or a few grams: probably in the cupboard already. */
 	function smallAmount(parts) {
 		return parts.length > 0 && parts.every(function (p) {
@@ -181,7 +192,8 @@
 			if (line.from.indexOf("Added") === -1) line.from.push("Added");
 		});
 
-		const unticked = {}, ticked = {};
+		const unticked = {}, ticked = {}, own = {};
+		Object.keys(input.qtys || {}).forEach(function (k) { const v = String(input.qtys[k] || "").trim(); if (v) own[itemKey(k)] = v; });
 		(input.unticked || []).forEach(function (k) { unticked[itemKey(k)] = true; });
 		(input.ticked || []).forEach(function (k) { ticked[itemKey(k)] = true; });
 		const rules = orderRules(input.order);
@@ -206,14 +218,18 @@
 			let name = line.names[0] || key;
 			if (!many) name = Scale.singular(name);
 			else if (plural && line.source === "dinner") name = plural;
-			const label = labelOf(capital(name), parts, line.extra);
+			const auto = qtyOf(parts, line.extra);
+			const mine = own[key]; // an amount you changed it to, e.g. 1 bag of carrots, not 3 carrots
+			const label = mine ? ownLabel(capital(name), mine) : labelOf(capital(name), parts, line.extra);
 			// a spoonful of soy sauce: on the list to check, but not ticked unless you tick it
 			const check = line.source === "dinner" && !line.alsoAdded && !line.regular && smallAmount(parts);
 			const place = placeOf(key, section, rules);
 			return {
 				key: key,
 				name: capital(name),
-				qty: qtyOf(parts, line.extra),
+				qty: mine ? ownQty(mine) : auto,
+				own: mine || "",
+				auto: auto,
 				label: label,
 				section: section,
 				from: line.from.join(", "),
@@ -275,7 +291,7 @@
 		});
 		const blocks = list.groups.filter(function (g) { return g.block; }).map(function (g) {
 			const lines = ticked(g).map(function (l) { return { text: l.text, gap: false }; });
-			if (!lines.length && g.name === OTHER) return null;
+			if (!lines.length) return null; // nothing for Bread or Tesco this time: leave it off the page
 			const fill = Math.max(4, Math.ceil(lines.length / 4) * 4);
 			while (lines.length < fill) lines.push(blank());
 			return { name: g.name, lines: lines };

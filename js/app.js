@@ -214,6 +214,7 @@ var ICONS = {
 	back: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
 	edit: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
 	cog: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+	plus: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M12 12v6M9 15h6"/></svg>',
 	print: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/></svg>',
 	camera: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>',
 	open: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
@@ -725,9 +726,74 @@ function screenRecipe(id, dayKey, inWeek) {
 			el("div", { class: "stack" },
 				el("button", { type: "button", class: "btn", onclick: function () { go("edit", { id: r.id, day: day ? day.key : "" }); } }, icon("edit"), "Edit time, notes or photo"),
 				el("button", { type: "button", class: "btn", onclick: function () { window.print(); } }, icon("print"), "Print"),
+				el("button", { type: "button", class: "btn", onclick: function () { addToNight(r); } }, icon("plus"), "Put on a night"),
 				day && !moved && day.key >= londonToday() ? el("button", { type: "button", class: "btn primary", onclick: function () { go("swap", { day: day.key }); } }, icon("swap"), "Swap " + day.label + "'s dinner") : null)
 		]);
 	}, function (e) { showError(main, e, function () { screenRecipe(id, dayKey, inWeek); }); });
+}
+
+/** "hoisin udon" -> "Hoisin Udon"; words with capitals of their own (BBQ) stay as they are. */
+function titleCase(s) {
+	var small = ["a", "an", "and", "or", "the", "with", "of", "in", "on", "for", "to", "from", "n"];
+	return String(s || "").trim().split(/\s+/).map(function (w, i) {
+		if (/[A-Z]/.test(w)) return w;
+		if (i > 0 && small.indexOf(w) !== -1) return w;
+		return w.split("-").map(function (p) { return p.charAt(0).toUpperCase() + p.slice(1); }).join("-");
+	}).join(" ");
+}
+
+/** From a recipe: put it on a night this week or next, under the name you choose for the calendar. */
+function addToNight(r) {
+	var seen = {};
+	var names = [r.title].concat(r.aliases || []).map(titleCase).filter(function (n) {
+		var k = n.toLowerCase();
+		if (!n || seen[k]) return false;
+		seen[k] = true;
+		return true;
+	});
+	var name = names.slice().sort(function (a, b) { return a.length - b.length; })[0]; // the short name, to start with
+	openSheet("Put " + r.title + " on a night", function (close) {
+		var nameRow = el("div", { class: "frow" });
+		var drawNames = function () {
+			nameRow.textContent = "";
+			names.forEach(function (n) {
+				nameRow.appendChild(el("button", { type: "button", class: "toggle sec", "aria-pressed": String(n === name), onclick: function () { name = n; drawNames(); } }, n));
+			});
+		};
+		drawNames();
+		var nightsEl = el("div", { class: "stack", style: "gap:10px" }, el("div", { class: "small muted" }, "Loading the nights\u2026"));
+		var pick = function (d) {
+			close();
+			call("setDinner", { day: d.key, choice: { recipeId: r.id, name: name } }).then(function () {
+				changed();
+				toast(name + " on " + d.dow + " " + d.num + (d.dinner ? " (instead of " + d.dinner.title + ")" : ""));
+			}).catch(function (e) { toast("It wasn't saved: " + e.message); });
+		};
+		var weekOf = function (w, label) {
+			freshDays(w);
+			var days = w.days.filter(function (d) { return !d.isPast; });
+			if (!days.length) return null;
+			return el("section", { class: "stack", style: "gap:6px" },
+				el("h2", null, label + " \u00b7 " + w.range),
+				el("div", { class: "nightpick" }, days.map(function (d) {
+					var mine = d.dinner && d.dinner.recipeId === r.id;
+					return el("button", { type: "button", class: mine ? "on" : "", disabled: mine ? true : null, onclick: function () { pick(d); } },
+						el("b", null, d.dow + " " + d.num),
+						el("span", { class: "small " + (d.dinner ? "" : "muted") }, mine ? "Already this" : d.dinner ? "instead of " + d.dinner.title : "Free"));
+				})));
+		};
+		Promise.all([call("week", { offset: 0 }), call("week", { offset: 1 })]).then(function (ws) {
+			nightsEl.textContent = "";
+			add(nightsEl, [weekOf(ws[0], "This week"), weekOf(ws[1], "Next week")]);
+		}).catch(function (e) {
+			nightsEl.textContent = "";
+			nightsEl.appendChild(el("div", { class: "error" }, "Couldn't load the nights: " + e.message));
+		});
+		return el("div", { class: "stack", style: "gap:14px" },
+			names.length > 1 ? el("div", { class: "stack", style: "gap:6px" }, el("div", { class: "flabel" }, "Name in the calendar"), nameRow) : null,
+			el("div", { class: "flabel" }, "Which night?"),
+			nightsEl);
+	});
 }
 
 /* ---------------- quick edit ---------------- */
@@ -1173,6 +1239,19 @@ function screenRecipes() {
 	}, function (e) { showError(main, e, screenRecipes); });
 }
 
+/** A small panel up from the bottom of the screen: openSheet("Title", function (close) { return content; }) */
+function openSheet(title, body) {
+	var overlay;
+	var close = function () { overlay.remove(); };
+	overlay = el("div", { class: "overlay", onclick: function (e) { if (e.target === overlay) close(); } },
+		el("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-label": title },
+			el("div", { class: "row" }, el("h2", { style: "color:var(--text);font-size:20px;letter-spacing:0;text-transform:none" }, title),
+				el("button", { type: "button", class: "x", "aria-label": "Close", onclick: close }, "\u00d7")),
+			body(close)));
+	document.body.appendChild(overlay);
+	return overlay;
+}
+
 /* ---------------- shopping ---------------- */
 var shopOffset = 1; // which week the list is for: 1 = next week, 0 = this week
 var shopView = "all"; // "added": just the things added by hand, for a quick trip mid-week
@@ -1190,7 +1269,11 @@ function screenShopping() {
 		// what the Sheet had (s.saved) plus the changes made here since (s.pending), in order
 		var pending = (s.pending || []).slice();
 		var base = s.saved.sig; // the Sheet's list these changes were made on
-		var stateOf = function (saved) { return { unticked: saved.unticked.slice(), ticked: (saved.ticked || []).slice(), added: saved.added.slice() }; };
+		var stateOf = function (saved) {
+			var qtys = {};
+			Object.keys(saved.qtys || {}).forEach(function (k) { qtys[FridgeShop.itemKey(k)] = saved.qtys[k]; });
+			return { unticked: saved.unticked.slice(), ticked: (saved.ticked || []).slice(), added: saved.added.slice(), qtys: qtys };
+		};
 		var state = stateOf(s.saved);
 		pending.forEach(function (op) { applyShopChange(state, op); });
 		var known = {};
@@ -1212,14 +1295,14 @@ function screenShopping() {
 
 		var build = function () {
 			list = FridgeShop.buildList({ dinners: s.dinners, recipes: s.recipes, household: s.household, regulars: s.regulars,
-				added: state.added, unticked: state.unticked, ticked: state.ticked, sections: s.sections, order: s.order });
+				added: state.added, unticked: state.unticked, ticked: state.ticked, qtys: state.qtys, sections: s.sections, order: s.order });
 		};
 		var rowsToSave = function () {
 			var rows = [];
-			list.groups.forEach(function (g) { g.items.forEach(function (x) { rows.push({ buy: x.ticked, item: x.name, qty: x.qty, section: x.section, from: x.from }); }); });
+			list.groups.forEach(function (g) { g.items.forEach(function (x) { rows.push({ buy: x.ticked, item: x.name, qty: x.qty, section: x.section, from: x.from, own: x.own }); }); });
 			return rows;
 		};
-		var sigOf = function (rows) { return rows.map(function (x) { return [x.item, x.qty, x.buy ? 1 : 0].join("|"); }).join("\n"); };
+		var sigOf = function (rows) { return rows.map(function (x) { return [x.item, x.qty, x.buy ? 1 : 0].concat(x.own ? [x.own] : []).join("|"); }).join("\n"); };
 		// keep this phone's copy up to date (with the changes not saved yet), so coming back shows
 		// the list as you left it, even if the Sheet couldn't be reached
 		var keepCopy = function () {
@@ -1250,7 +1333,9 @@ function screenShopping() {
 				tries = 0;
 				pending = pending.slice(sent);
 				base = res && typeof res.sig === "string" ? res.sig : sigOf(rows);
-				s.saved = { any: true, unticked: state.unticked.slice(), ticked: state.ticked.slice(), added: state.added.slice(), sig: base };
+				var qtys = {};
+				list.groups.forEach(function (g) { g.items.forEach(function (x) { if (x.own) qtys[x.name] = x.own; }); });
+				s.saved = { any: true, unticked: state.unticked.slice(), ticked: state.ticked.slice(), added: state.added.slice(), qtys: qtys, sig: base };
 				keepCopy();
 				if (again) { again = false; send(); }
 			}).catch(function (e) {
@@ -1279,6 +1364,22 @@ function screenShopping() {
 			change({ op: "add", item: item, section: section });
 			toast(item + " added to " + section);
 		};
+		// a different amount: 1 bag of carrots, not the 3 carrots the recipes need; 2 milk this week, not 3
+		var editQty = function (x) {
+			openSheet(x.name + ": how many?", function (close) {
+				var set = function (v) { change({ op: "qty", item: x.name, qty: v }); close(); toast(v ? x.name + ": " + v : x.name + ": back to " + (x.auto || "no amount")); };
+				var input = el("input", { class: "field", type: "text", maxlength: "40", placeholder: "or type, e.g. 1kg bag", autocomplete: "off", enterkeyhint: "done", "aria-label": "Amount", value: x.own });
+				var use = function () { var v = input.value.replace(/\s+/g, " ").trim(); if (v) set(v); else input.focus(); };
+				input.addEventListener("keydown", function (e) { if (e.key === "Enter") use(); });
+				return el("div", { class: "stack", style: "gap:12px" },
+					el("div", { class: "small muted" }, x.source === "regular" ? "Every week: " + (x.auto || "no amount set") : x.source === "added" ? "Added by hand" : "The recipes need: " + (x.auto || "no amount")),
+					el("div", { class: "qtygrid" }, [1, 2, 3, 4, 5, 6].map(function (n) {
+						return el("button", { type: "button", "aria-pressed": String(x.own === String(n)), onclick: function () { set(String(n)); } }, String(n));
+					})),
+					el("div", { class: "typerow" }, input, el("button", { type: "button", class: "btn primary usebtn", onclick: use }, "Use")),
+					x.own ? el("button", { type: "button", class: "btn", onclick: function () { set(""); } }, "Back to " + (x.auto || "no amount")) : null);
+			});
+		};
 
 		var draw = function () {
 			build();
@@ -1305,8 +1406,10 @@ function screenShopping() {
 						return el("div", { class: "srow" + (x.ticked ? "" : " off") },
 							el("button", { type: "button", class: "stoggle", "aria-pressed": String(x.ticked), onclick: function () { toggle(x); } },
 								el("span", { class: "sbox", html: x.ticked ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' : "" }),
-								el("span", { class: "stext" }, el("span", { class: "sname" }, x.label), el("span", { class: "sfrom" }, (x.check ? "Check the cupboard \u00b7 " : "") + x.from))),
-							x.source === "added" ? el("button", { type: "button", class: "x", "aria-label": "Take " + x.name + " off the list", onclick: function () { removeAdded(x); } }, "×") : null);
+								el("span", { class: "stext" }, el("span", { class: "sname" }, x.label),
+									el("span", { class: "sfrom" }, (x.own ? "Changed from " + (x.auto || "no amount") + " \u00b7 " : "") + (x.check ? "Check the cupboard \u00b7 " : "") + x.from))),
+							el("button", { type: "button", class: "qtybtn" + (x.own ? " set" : ""), "aria-label": "Change how many " + x.name, onclick: function () { editQty(x); } }, x.own ? (x.qty || x.own) : "\u00b1"),
+							x.source === "added" ? el("button", { type: "button", class: "x", "aria-label": "Take " + x.name + " off the list", onclick: function () { removeAdded(x); } }, "\u00d7") : null);
 					}))));
 			});
 			if (addedOnly && !nAdded) {
@@ -1430,6 +1533,10 @@ function applyShopChange(state, op) {
 		if (!state.added.some(function (a) { return FridgeShop.itemKey(a.item) === key; })) state.added.push({ item: op.item, qty: "", section: op.section });
 	} else if (op.op === "remove") {
 		state.added = state.added.filter(function (a) { return FridgeShop.itemKey(a.item) !== key; });
+	} else if (op.op === "qty") {
+		state.qtys = state.qtys || {};
+		if (op.qty) state.qtys[key] = op.qty;
+		else delete state.qtys[key];
 	}
 	return state;
 }

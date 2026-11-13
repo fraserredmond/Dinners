@@ -256,3 +256,18 @@ body.withcog #busy { right: 60px; } /* the week screen's settings cog is in that
 .dragghost { position: fixed; z-index: 40; margin: 0; pointer-events: none; transform: scale(1.03); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22); }
 body.dragging, body.dragging * { cursor: grabbing !important; }
 .night.dragghost { background: var(--panel); border-radius: 12px; padding: 11px 12px; border-bottom: none; }
+
+/* changing how many of something to buy */
+.qtybtn { flex: none; min-width: 44px; min-height: 40px; padding: 0 10px; border-radius: 999px; border: 2px solid var(--line); background: var(--panel); color: var(--muted); font-size: 16px; font-weight: 700; }
+.qtybtn.set { border-color: var(--text); color: var(--text); }
+.srow .qtybtn { margin-right: 6px; }
+.srow .qtybtn + .x { margin-left: -2px; }
+.qtygrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+.qtygrid button { min-height: 48px; border-radius: 12px; border: 2px solid var(--line); background: var(--panel); font-size: 18px; font-weight: 700; }
+.qtygrid button[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: #fff; }
+/* putting a recipe on a night */
+.nightpick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.nightpick button { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; min-height: 56px; padding: 8px 12px; border-radius: 12px; border: 2px solid var(--line); background: var(--panel); }
+.nightpick button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.nightpick button.on { border-color: var(--text); }
+.nightpick button:disabled { opacity: 0.6; }
