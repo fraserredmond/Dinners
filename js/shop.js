@@ -192,7 +192,8 @@
 			if (line.from.indexOf("Added") === -1) line.from.push("Added");
 		});
 
-		const unticked = {}, ticked = {}, own = {};
+		const unticked = {}, ticked = {}, own = {}, got = {};
+		(input.got || []).forEach(function (k) { got[itemKey(k)] = true; }); // bought already (crossed off in the shop)
 		Object.keys(input.qtys || {}).forEach(function (k) { const v = String(input.qtys[k] || "").trim(); if (v) own[itemKey(k)] = v; });
 		(input.unticked || []).forEach(function (k) { unticked[itemKey(k)] = true; });
 		(input.ticked || []).forEach(function (k) { ticked[itemKey(k)] = true; });
@@ -237,6 +238,7 @@
 				check: check,
 				added: line.source === "added" || Boolean(line.alsoAdded),
 				ticked: check ? Boolean(ticked[key]) : !unticked[key],
+				got: Boolean(got[key]),
 				group: place[0] + ":" + place[1],
 				place: place
 			};
@@ -259,7 +261,12 @@
 			};
 		}).filter(function (g) { return g.items.length || g.name !== OTHER; });
 		groups.forEach(function (g) { g.items.forEach(function (x) { delete x.place; }); });
-		return { groups: groups, count: items.filter(function (x) { return x.ticked; }).length };
+		const toBuy = items.filter(function (x) { return x.ticked; });
+		return {
+			groups: groups,
+			count: toBuy.filter(function (x) { return !x.got; }).length, // still to get
+			gotCount: toBuy.filter(function (x) { return x.got; }).length
+		};
 	}
 
 	/** Bread and Tesco go across the page below the aisles; the On paper column can say otherwise. */
@@ -279,7 +286,7 @@
 	function paper(list) {
 		const ticked = function (g) {
 			let last = null;
-			return g.items.filter(function (x) { return x.ticked; }).map(function (x, i) {
+			return g.items.filter(function (x) { return x.ticked && !x.got; }).map(function (x, i) {
 				const line = { text: x.label, gap: i > 0 && x.group !== last };
 				last = x.group;
 				return line;

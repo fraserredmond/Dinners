@@ -1254,10 +1254,24 @@ function openSheet(title, body) {
 
 /* ---------------- shopping ---------------- */
 var shopOffset = 1; // which week the list is for: 1 = next week, 0 = this week
+var shopOffsetChosen = false; // chosen with the week buttons since the app opened
+// after a shop, the things not got stay on that week's list; the next few days, open that week
+function rememberLeftovers(week, n) {
+	try { if (n) localStorage.setItem("dinners.leftover", week); else localStorage.removeItem("dinners.leftover"); } catch (e) { /* just a convenience */ }
+}
+function leftoverWeek() { try { return localStorage.getItem("dinners.leftover") || ""; } catch (e) { return ""; } }
+function shopModeWeek() { try { return localStorage.getItem("dinners.shopMode") || ""; } catch (e) { return ""; } }
+function setShopMode(week) { try { if (week) localStorage.setItem("dinners.shopMode", week); else localStorage.removeItem("dinners.shopMode"); } catch (e) { /* this time only */ } }
 var shopView = "all"; // "added": just the things added by hand, for a quick trip mid-week
 try { if (localStorage.getItem("dinners.shopView") === "added") shopView = "added"; } catch (e) { /* default */ }
 
 function screenShopping() {
+	// just back from the shop with things still to get: open that week (now "this week")
+	if (!shopOffsetChosen) {
+		var thisWeek = cache.week || storeGet(storeKey("week", { offset: 0 }));
+		var start = thisWeek && thisWeek.days && thisWeek.days[0] ? thisWeek.days[0].key : "";
+		if (start && leftoverWeek() === start) shopOffset = 0;
+	}
 	loading(main);
 	document.body.classList.add("shopping");
 	var touched = false; // once you've ticked or added something, a late answer from the Sheet doesn't redraw over it
@@ -1272,7 +1286,7 @@ function screenShopping() {
 		var stateOf = function (saved) {
 			var qtys = {};
 			Object.keys(saved.qtys || {}).forEach(function (k) { qtys[FridgeShop.itemKey(k)] = saved.qtys[k]; });
-			return { unticked: saved.unticked.slice(), ticked: (saved.ticked || []).slice(), added: saved.added.slice(), qtys: qtys };
+			return { unticked: saved.unticked.slice(), ticked: (saved.ticked || []).slice(), added: saved.added.slice(), qtys: qtys, got: (saved.got || []).slice() };
 		};
 		var state = stateOf(s.saved);
 		pending.forEach(function (op) { applyShopChange(state, op); });
@@ -1283,7 +1297,11 @@ function screenShopping() {
 		var groupsEl = el("div", { class: "stack", style: "gap:16px" });
 		var oftenEl = el("div", { class: "frow" });
 		var printBtn = el("button", { type: "button", class: "btn primary", onclick: function () { window.print(); } });
-		var printBar = el("div", { class: "stack savebar" }, printBtn);
+		var shopBtns = el("div", { class: "frow" }); // Shop with the app, Done shopping…
+		var doneBtn = el("button", { type: "button", class: "btn primary", onclick: function () { doneShop(); } }, "Done shopping");
+		printBtn.classList.add("printbtn");
+		var printBar = el("div", { class: "stack savebar" }, printBtn, doneBtn);
+		var addSection = el("section", { class: "stack", style: "gap:8px" });
 		var viewRow = el("div", { class: "frow" });
 		var info = el("div", { class: "card small" });
 		var setView = function (v) {
@@ -1295,14 +1313,14 @@ function screenShopping() {
 
 		var build = function () {
 			list = FridgeShop.buildList({ dinners: s.dinners, recipes: s.recipes, household: s.household, regulars: s.regulars,
-				added: state.added, unticked: state.unticked, ticked: state.ticked, qtys: state.qtys, sections: s.sections, order: s.order });
+				added: state.added, unticked: state.unticked, ticked: state.ticked, qtys: state.qtys, got: state.got, sections: s.sections, order: s.order });
 		};
 		var rowsToSave = function () {
 			var rows = [];
-			list.groups.forEach(function (g) { g.items.forEach(function (x) { rows.push({ buy: x.ticked, item: x.name, qty: x.qty, section: x.section, from: x.from, own: x.own }); }); });
+			list.groups.forEach(function (g) { g.items.forEach(function (x) { rows.push({ buy: x.ticked, item: x.name, qty: x.qty, section: x.section, from: x.from, own: x.own, got: x.got }); }); });
 			return rows;
 		};
-		var sigOf = function (rows) { return rows.map(function (x) { return [x.item, x.qty, x.buy ? 1 : 0].concat(x.own ? [x.own] : []).join("|"); }).join("\n"); };
+		var sigOf = function (rows) { return rows.map(function (x) { return [x.item, x.qty, x.buy ? 1 : 0].concat(x.own ? [x.own] : []).concat(x.got ? ["got"] : []).join("|"); }).join("\n"); };
 		// keep this phone's copy up to date (with the changes not saved yet), so coming back shows
 		// the list as you left it, even if the Sheet couldn't be reached
 		var keepCopy = function () {
@@ -1335,7 +1353,7 @@ function screenShopping() {
 				base = res && typeof res.sig === "string" ? res.sig : sigOf(rows);
 				var qtys = {};
 				list.groups.forEach(function (g) { g.items.forEach(function (x) { if (x.own) qtys[x.name] = x.own; }); });
-				s.saved = { any: true, unticked: state.unticked.slice(), ticked: state.ticked.slice(), added: state.added.slice(), qtys: qtys, sig: base };
+				s.saved = { any: true, unticked: state.unticked.slice(), ticked: state.ticked.slice(), added: state.added.slice(), qtys: qtys, got: state.got.slice(), sig: base };
 				keepCopy();
 				if (again) { again = false; send(); }
 			}).catch(function (e) {
@@ -1353,6 +1371,7 @@ function screenShopping() {
 			pending.push(op);
 			applyShopChange(state, op);
 			draw(); save();
+			if (leftoverWeek() === s.week.start && !list.count) rememberLeftovers(s.week.start, 0);
 		};
 		var onList = function (key) { return list.groups.some(function (g) { return g.items.some(function (x) { return x.key === key; }); }); };
 		var toggle = function (x) { change({ op: x.ticked ? "untick" : "tick", item: x.name }); };
@@ -1381,24 +1400,96 @@ function screenShopping() {
 			});
 		};
 
+		// shopping with the app: tap things as they go in the basket
+		var gotIt = function (x, yes) { change({ op: "got", item: x.name, got: yes }); };
+		var startShop = function () { setShopMode(s.week.start); window.scrollTo(0, 0); draw(); };
+		var finishShop = function () {
+			setShopMode("");
+			rememberLeftovers(s.week.start, list.count);
+			window.scrollTo(0, 0);
+			draw();
+			toast(list.count ? list.count + " still to get: they stay on this list" : "All done");
+		};
+		var doneShop = function () {
+			if (!list.count) { finishShop(); return; }
+			openSheet("Done shopping?", function (close) {
+				return el("div", { class: "stack", style: "gap:12px" },
+					el("div", null, list.count + " thing" + (list.count === 1 ? " isn't" : "s aren't") + " crossed off. " + (list.count === 1 ? "It stays" : "They stay") + " on this week's list, to pick up later."),
+					el("button", { type: "button", class: "btn primary", onclick: function () { close(); finishShop(); } }, "Finish"),
+					el("button", { type: "button", class: "btn", onclick: close }, "Keep shopping"));
+			});
+		};
+		// shopped from the printout: everything was bought except what you say you didn't get
+		var afterPrintout = function () {
+			var missed = {};
+			openSheet("What didn't you get?", function (close) {
+				var toGet = [];
+				list.groups.forEach(function (g) { g.items.forEach(function (x) { if (x.ticked && !x.got) toGet.push(x); }); });
+				var grid = el("div", { class: "frow" }, toGet.map(function (x) {
+					var b = el("button", { type: "button", class: "toggle sec", "aria-pressed": "false", onclick: function () {
+						missed[x.key] = !missed[x.key];
+						b.setAttribute("aria-pressed", String(missed[x.key]));
+					} }, x.label);
+					return b;
+				}));
+				return el("div", { class: "stack", style: "gap:12px" },
+					el("div", { class: "small muted" }, "Tap anything you didn't get. Everything else is marked as bought; the rest stays on this week's list."),
+					grid,
+					el("button", { type: "button", class: "btn primary", onclick: function () {
+						close();
+						toGet.forEach(function (x) { if (!missed[x.key]) { pending.push({ op: "got", item: x.name, got: true }); applyShopChange(state, { op: "got", item: x.name, got: true }); } });
+						draw(); save();
+						finishShop();
+					} }, "Done"));
+			});
+		};
+
 		var draw = function () {
 			build();
-			var addedOnly = shopView === "added";
+			var shopping = shopModeWeek() === s.week.start;
+			var addedOnly = !shopping && shopView === "added";
+			var after = list.gotCount > 0; // some things bought already: the rest are "still to get"
 			var nAdded = 0;
-			list.groups.forEach(function (g) { g.items.forEach(function (x) { if (x.added) nAdded++; }); });
+			var pickUp = function (x) { return (x.added || (after && x.ticked)) && !x.got; }; // the mid-week trip: added things, and what the big shop missed
+			list.groups.forEach(function (g) { g.items.forEach(function (x) { if (pickUp(x)) nAdded++; }); });
 			viewRow.textContent = "";
 			add(viewRow, [
 				el("button", { type: "button", class: "toggle", "aria-pressed": String(!addedOnly), onclick: function () { setView("all"); } }, "Everything"),
-				el("button", { type: "button", class: "toggle", "aria-pressed": String(addedOnly), onclick: function () { setView("added"); } }, "Added by hand (" + nAdded + ")")
+				el("button", { type: "button", class: "toggle", "aria-pressed": String(addedOnly), onclick: function () { setView("added"); } }, (after ? "Still to get (" : "Added by hand (") + nAdded + ")")
 			]);
+			viewRow.style.display = shopping ? "none" : "";
 			info.textContent = "";
 			info.style.display = addedOnly ? "none" : "";
-			if (!addedOnly) add(info, ["Everything for " + s.week.range + " is ticked to buy. ", el("b", null, "Untick what you already have."),
+			if (shopping) add(info, [el("b", null, "Shopping now. "), "Tap things as they go in the basket. ", el("b", null, list.count + " to get.")]);
+			else if (!addedOnly) add(info, ["Everything for " + s.week.range + " is ticked to buy. ", el("b", null, "Untick what you already have."),
 				s.dinners.length ? el("div", { class: "muted", style: "margin-top:4px" }, "From " + s.dinners.length + " dinner" + (s.dinners.length === 1 ? "" : "s") + " with a recipe, for " + s.household + ".") : null]);
 			printBar.style.display = addedOnly ? "none" : "";
+			addSection.style.display = shopping ? "none" : "";
 			groupsEl.textContent = "";
+			var bought = [];
+			list.groups.forEach(function (g) { g.items.forEach(function (x) { if (x.ticked && x.got) bought.push(x); }); });
+			var basketRow = function (x) {
+				return el("div", { class: "srow got" },
+					el("button", { type: "button", class: "stoggle", "aria-pressed": "true", "aria-label": x.label + ": bought. Tap if it isn't.", onclick: function () { gotIt(x, false); } },
+						el("span", { class: "sbox", html: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' }),
+						el("span", { class: "stext" }, el("span", { class: "sname" }, x.label), el("span", { class: "sfrom" }, x.section))));
+			};
 			list.groups.forEach(function (g) {
-				var items = addedOnly ? g.items.filter(function (x) { return x.added; }) : g.items;
+				var items = g.items.filter(function (x) { return !(x.ticked && x.got); }); // bought: further down
+				if (addedOnly) items = items.filter(pickUp);
+				if (shopping) {
+					items = items.filter(function (x) { return x.ticked; });
+					if (!items.length) return;
+					groupsEl.appendChild(el("section", { class: "stack", style: "gap:6px" },
+						el("h2", null, g.name),
+						el("div", { class: "shopcard" }, items.map(function (x) {
+							return el("div", { class: "srow" },
+								el("button", { type: "button", class: "stoggle", "aria-label": x.label + ": tap when it's in the basket", onclick: function () { gotIt(x, true); } },
+									el("span", { class: "sbox empty" }),
+									el("span", { class: "stext" }, el("span", { class: "sname" }, x.label), x.own || x.check ? el("span", { class: "sfrom" }, x.own ? "Changed from " + (x.auto || "no amount") : "Check the cupboard") : null)));
+						}))));
+					return;
+				}
 				if (!items.length) return;
 				groupsEl.appendChild(el("section", { class: "stack", style: "gap:6px" },
 					el("h2", null, g.name),
@@ -1407,11 +1498,19 @@ function screenShopping() {
 							el("button", { type: "button", class: "stoggle", "aria-pressed": String(x.ticked), onclick: function () { toggle(x); } },
 								el("span", { class: "sbox", html: x.ticked ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg>' : "" }),
 								el("span", { class: "stext" }, el("span", { class: "sname" }, x.label),
-									el("span", { class: "sfrom" }, (x.own ? "Changed from " + (x.auto || "no amount") + " \u00b7 " : "") + (x.check ? "Check the cupboard \u00b7 " : "") + x.from))),
+									el("span", { class: "sfrom" }, (after && x.ticked ? "Still to get \u00b7 " : "") + (x.own ? "Changed from " + (x.auto || "no amount") + " \u00b7 " : "") + (x.check ? "Check the cupboard \u00b7 " : "") + x.from))),
 							el("button", { type: "button", class: "qtybtn" + (x.own ? " set" : ""), "aria-label": "Change how many " + x.name, onclick: function () { editQty(x); } }, x.own ? (x.qty || x.own) : "\u00b1"),
 							x.source === "added" ? el("button", { type: "button", class: "x", "aria-label": "Take " + x.name + " off the list", onclick: function () { removeAdded(x); } }, "\u00d7") : null);
 					}))));
 			});
+			if (bought.length && !addedOnly) {
+				groupsEl.appendChild(shopping
+					? el("section", { class: "stack", style: "gap:6px" }, el("h2", null, "In the basket (" + bought.length + ")"), el("div", { class: "shopcard" }, bought.map(basketRow)))
+					: el("details", { class: "bought" }, el("summary", null, "Bought (" + bought.length + ")"), el("div", { class: "shopcard" }, bought.map(basketRow))));
+			}
+			if (shopping && !list.count) {
+				groupsEl.insertBefore(el("div", { class: "card stack" }, el("b", null, "Everything's in the basket."), el("span", { class: "muted" }, "Tap Done shopping.")), groupsEl.firstChild);
+			}
 			if (addedOnly && !nAdded) {
 				groupsEl.appendChild(el("div", { class: "card stack" },
 					el("b", null, "Nothing added by hand yet."),
@@ -1424,6 +1523,12 @@ function screenShopping() {
 			printBtn.textContent = "";
 			add(printBtn, [icon("print"), "Print " + list.count + " item" + (list.count === 1 ? "" : "s")]);
 			printBtn.disabled = list.count === 0;
+			printBtn.style.display = shopping ? "none" : "";
+			doneBtn.style.display = shopping ? "" : "none";
+			shopBtns.textContent = "";
+			if (!shopping && !addedOnly && list.count) add(shopBtns, [
+				el("button", { type: "button", class: "toggle", onclick: startShop }, "Shop with the app"),
+				el("button", { type: "button", class: "toggle", onclick: afterPrintout }, "Done shopping\u2026")]);
 			// Often bought: not already on the list
 			oftenEl.textContent = "";
 			(s.often || []).filter(function (o) { return !onList(FridgeShop.itemKey(o.item)); }).slice(0, 8).forEach(function (o) {
@@ -1492,10 +1597,15 @@ function screenShopping() {
 		};
 		var weekBtn = function (n) {
 			var w = s.weeks[n];
-			return el("button", { type: "button", class: "toggle", "aria-pressed": String(s.offset === n), onclick: function () { if (s.offset !== n) { shopOffset = n; screenToken++; screenShopping(); } } },
+			return el("button", { type: "button", class: "toggle", "aria-pressed": String(s.offset === n), onclick: function () { if (s.offset !== n) { shopOffset = n; shopOffsetChosen = true; screenToken++; screenShopping(); } } },
 				n ? "Next week \u00b7 " + dayLabel(w.start) : "This week \u00b7 " + dayLabel(w.start, 6));
 		};
 
+		add(addSection, [
+			el("label", { for: "additem", class: "lab", style: "font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700" }, "Add something"),
+			el("div", { class: "typerow" }, input, el("button", { type: "button", class: "btn primary usebtn", onclick: addNow }, "Add")),
+			el("div", { class: "small muted" }, "Section:"), secRow,
+			s.often && s.often.length ? el("div", { class: "small muted" }, "Often bought:") : null, oftenEl]);
 		draw();
 		main.textContent = "";
 		add(main, [
@@ -1503,12 +1613,9 @@ function screenShopping() {
 			el("div", { class: "frow" }, weekBtn(0), weekBtn(1)),
 			viewRow,
 			info,
+			shopBtns,
 			groupsEl,
-			el("section", { class: "stack", style: "gap:8px" },
-				el("label", { for: "additem", class: "lab", style: "font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700" }, "Add something"),
-				el("div", { class: "typerow" }, input, el("button", { type: "button", class: "btn primary usebtn", onclick: addNow }, "Add")),
-				el("div", { class: "small muted" }, "Section:"), secRow,
-				s.often && s.often.length ? el("div", { class: "small muted" }, "Often bought:") : null, oftenEl),
+			addSection,
 			printBar
 		]);
 		// the Sheet's Shopping list tab follows the list, if it has changed (new dinners, new regulars)
@@ -1533,6 +1640,9 @@ function applyShopChange(state, op) {
 		if (!state.added.some(function (a) { return FridgeShop.itemKey(a.item) === key; })) state.added.push({ item: op.item, qty: "", section: op.section });
 	} else if (op.op === "remove") {
 		state.added = state.added.filter(function (a) { return FridgeShop.itemKey(a.item) !== key; });
+	} else if (op.op === "got") {
+		state.got = (state.got || []).filter(other);
+		if (op.got) state.got.push(op.item);
 	} else if (op.op === "qty") {
 		state.qtys = state.qtys || {};
 		if (op.qty) state.qtys[key] = op.qty;

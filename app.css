@@ -271,3 +271,10 @@ body.dragging, body.dragging * { cursor: grabbing !important; }
 .nightpick button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
 .nightpick button.on { border-color: var(--text); }
 .nightpick button:disabled { opacity: 0.6; }
+
+/* shopping with the app */
+.sbox.empty { background: var(--panel); border-color: #8c939d; }
+.srow.got .sname { font-weight: 400; color: var(--dim); text-decoration: line-through; }
+details.bought { margin-top: 4px; }
+details.bought summary { cursor: pointer; font-size: 15px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 700; padding: 8px 0; }
+.savebar .row .btn { flex: 1; }
