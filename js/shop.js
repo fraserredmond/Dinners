@@ -131,7 +131,7 @@
 	/**
 	 * Builds the list.
 	 * input: {
-	 *   dinners: [{ day, recipeId }], recipes: { id: { title, aliases, servings, ingredients: [...] } },
+	 *   dinners: [{ day, recipeId, bake? }], recipes: { id: { title, aliases, servings, asWritten?, ingredients: [...] } },
 	 *   household, regulars: [{ item, qty, section }], added: [{ item, qty, section }],
 	 *   unticked: [keys], sections: [{ name, order, onPaper }], order: [{ section, order, words }]
 	 * }
@@ -158,7 +158,8 @@
 				let q = typeof ing.qty === "number" && isFinite(ing.qty) ? ing.qty : null;
 				if (q === null) line.loose = true;
 				else {
-					if (ing.scale !== false && r.servings > 0 && r.servings !== household) q = Scale.roundQty(q * household / r.servings, unit);
+					// baking (asWritten) is made as the recipe says; dinners are scaled to the household
+					if (!r.asWritten && ing.scale !== false && r.servings > 0 && r.servings !== household) q = Scale.roundQty(q * household / r.servings, unit);
 					const u = unit === "kg" ? "g" : unit === "l" ? "ml" : unit;
 					if (unit === "kg" || unit === "l") q *= 1000;
 					line.totals[u] = (line.totals[u] || 0) + q;

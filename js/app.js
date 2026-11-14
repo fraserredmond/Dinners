@@ -306,6 +306,7 @@ var ICONS = {
 	back: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
 	edit: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
 	cog: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+	bake: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18"/><path d="M5 21v-7a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v7"/><path d="M5 16c1.5 1 3 1 4.5 0s3-1 4.5 0 3 1 5 0"/><path d="M12 12V8"/><path d="M12 5.5a1 1 0 1 0 0-.01"/></svg>',
 	plus: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4M12 12v6M9 15h6"/></svg>',
 	print: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"/><rect x="3" y="9" width="18" height="8" rx="2"/><path d="M6 14h12v7H6z"/></svg>',
 	camera: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13.5" r="3.5"/></svg>',
@@ -350,8 +351,8 @@ function chips(r, withCarbs) {
 		withCarbs && r.carbsPer100g !== null && r.carbsPer100g !== undefined ? el("span", { class: "chip carbs" }, r.carbsPer100g + "g carbs per 100g") : null);
 }
 /* ---------------- filters (Recipes list and Plan) ---------------- */
-var TYPES = ["chicken", "beef", "pork", "fish", "soup", "vegetarian", "salad"];
-var TYPE_LABELS = { chicken: "Chicken", beef: "Beef", pork: "Pork", fish: "Fish", soup: "Soup", vegetarian: "Vegetarian", salad: "Salad" };
+var TYPES = ["chicken", "beef", "pork", "fish", "soup", "vegetarian", "salad", "baking"];
+var TYPE_LABELS = { chicken: "Chicken", beef: "Beef", pork: "Pork", fish: "Fish", soup: "Soup", vegetarian: "Vegetarian", salad: "Salad", baking: "Baking" };
 var TIMES = [0, 20, 30, 45];
 var NO_COOKING = ["Takeaway", "Out", "Leftovers"];
 
@@ -754,8 +755,16 @@ function swapWeekDays(w, keyA, keyB) {
 	});
 }
 
+/** Under a day: what's being baked that day (its own small row: tap for the recipe). Not draggable: bakes stay on their day. */
+function bakeRows(d) {
+	return (d.bakes || []).map(function (b) {
+		return el("button", { type: "button", class: "bakerow" + (d.isPast ? " past" : ""), onclick: function () { go("recipe", { id: b.recipeId, day: d.key }); } },
+			icon("bake"), el("span", { class: "small muted" }, "Baking"), el("b", null, b.title));
+	});
+}
+
 function weekList(w, compact, past) {
-	var days = el("div", { class: "days" + (past ? " pastweek" : "") }, w.days.map(function (d) { return dayRow(d, w, compact); }),
+	var days = el("div", { class: "days" + (past ? " pastweek" : "") }, w.days.map(function (d) { return [dayRow(d, w, compact), bakeRows(d)]; }),
 		past ? null : el("button", { type: "button", class: "next", onclick: function () { go("plan"); } },
 			el("span", { class: "row", style: "width:100%" },
 				el("span", { class: "stack", style: "gap:2px" },
@@ -842,6 +851,7 @@ function renderSide() {
 function screenRecipe(id, dayKey, inWeek) {
 	loading(main);
 	quick("recipe", { id: id, day: dayKey || null }, function (r) {
+		var baking = Boolean(r.isBaking); // made as written, beside a dinner
 		var servings = r.household;
 		var ingList = el("div", { class: "ings" });
 		var count = el("div", { class: "count" });
@@ -849,8 +859,9 @@ function screenRecipe(id, dayKey, inWeek) {
 		var heading = el("div", { style: "font-weight:700" });
 		var draw = function () {
 			count.textContent = servings;
-			heading.textContent = "Cooking for " + servings;
-			note.textContent = servings === r.household ? "Same as the fridge" : "Just for now \u00b7 the fridge still shows " + r.household;
+			heading.textContent = (baking ? "Makes " : "Cooking for ") + servings;
+			note.textContent = baking ? (servings === r.household ? "As the recipe says" : "Just for now \u00b7 the recipe makes " + r.household)
+				: servings === r.household ? "Same as the fridge" : "Just for now \u00b7 the fridge still shows " + r.household;
 			ingList.textContent = "";
 			r.ingredients.forEach(function (i) {
 				var s = FridgeScale.scaleIngredient(i, r.servings, servings);
@@ -861,14 +872,15 @@ function screenRecipe(id, dayKey, inWeek) {
 		var day = r.day;
 		if (day) day.isToday = day.key === londonToday();
 		// the calendar now has something else on that day (changed on another phone, or in Google Calendar)
-		var moved = day && r.dayDinner !== undefined && !(r.dayDinner && r.dayDinner.recipeId === r.id);
-		var dayLabel = day ? (day.isToday ? "Tonight" : day.label) : "";
+		var moved = baking ? Boolean(day) && r.dayBaking === false : day && r.dayDinner !== undefined && !(r.dayDinner && r.dayDinner.recipeId === r.id);
+		var dayLabel = day ? (baking ? (day.isToday ? "Baking today" : "Baking \u00b7 " + day.label) : day.isToday ? "Tonight" : day.label) : "";
 		var whenText = moved ? "" : dayLabel;
 		main.textContent = "";
 		add(main, [
 			!inWeek ? el("button", { type: "button", class: "back", onclick: back }, icon("back"), "Back") : null,
 			whenText ? el("div", { class: "eyebrow" }, whenText) : null,
-			moved ? el("div", { class: "notice", role: "alert" },
+			moved && baking ? el("div", { class: "notice", role: "alert" }, el("b", null, r.title + " isn't on " + (day.isToday ? "today" : day.label) + " any more.")) : null,
+			moved && !baking ? el("div", { class: "notice", role: "alert" },
 				el("b", null, r.dayDinner ? (day.isToday ? "Tonight's" : day.label + "'s") + " dinner is now " + r.dayDinner.title + "." : "Nothing is planned for " + (day.isToday ? "tonight" : day.label) + " now."),
 				el("div", null, "This recipe isn't on that day any more."),
 				r.dayDinner && r.dayDinner.recipeId ? el("button", { type: "button", class: "btn primary", onclick: function () { go("recipe", { id: r.dayDinner.recipeId, day: day.key }, true); } }, "Open " + r.dayDinner.title) : null) : null,
@@ -895,8 +907,10 @@ function screenRecipe(id, dayKey, inWeek) {
 			el("div", { class: "stack" },
 				el("button", { type: "button", class: "btn", onclick: function () { go("edit", { id: r.id, day: day ? day.key : "" }); } }, icon("edit"), "Edit time, notes or photo"),
 				el("button", { type: "button", class: "btn", onclick: function () { window.print(); } }, icon("print"), "Print"),
-				el("button", { type: "button", class: "btn", onclick: function () { addToNight(r); } }, icon("plus"), "Put on a night"),
-				day && !moved && day.key >= londonToday() ? el("button", { type: "button", class: "btn primary", onclick: function () { go("swap", { day: day.key }); } }, icon("swap"), "Swap " + day.label + "'s dinner") : null)
+				baking ? bakeDaysList(r) : null,
+				baking ? el("button", { type: "button", class: "btn" + (r.bakeDays && r.bakeDays.length ? "" : " primary"), onclick: function () { bakeOnDay(r); } }, icon("bake"), "Bake on a day")
+					: el("button", { type: "button", class: "btn", onclick: function () { addToNight(r); } }, icon("plus"), "Put on a night"),
+				!baking && day && !moved && day.key >= londonToday() ? el("button", { type: "button", class: "btn primary", onclick: function () { go("swap", { day: day.key }); } }, icon("swap"), "Swap " + day.label + "'s dinner") : null)
 		]);
 	}, function (e) { showError(main, e, function () { screenRecipe(id, dayKey, inWeek); }); });
 }
@@ -962,6 +976,70 @@ function addToNight(r) {
 			names.length > 1 ? el("div", { class: "stack", style: "gap:6px" }, el("div", { class: "flabel" }, "Name in the calendar"), nameRow) : null,
 			el("div", { class: "flabel" }, "Which night?"),
 			nightsEl);
+	});
+}
+
+/* ---------------- baking ----------------
+ * A baking recipe (Type "Baking" in the Sheet) is never a dinner: it goes on a day beside the
+ * dinner, as its own calendar entry, and its ingredients go on that week's shopping list. */
+function bakeSaved(r, msg) {
+	changed();
+	storeForget(["recipe:" + JSON.stringify({ id: r.id }).slice(0, -1)]);
+	toast(msg);
+	if (current.name === "recipe" && current.args.id === r.id) show();
+}
+function takeOffBake(r, key, label) {
+	return call("removeBake", { day: key, recipeId: r.id }).then(function () { bakeSaved(r, r.title + " taken off " + label); })
+		.catch(function (e) { toast("It wasn't changed: " + e.message); });
+}
+/** On the recipe screen: the days from today it's planned for, each with Take off. */
+function bakeDaysList(r) {
+	if (!r.bakeDays || !r.bakeDays.length) return null;
+	return el("div", { class: "stack bakedays", style: "gap:6px" },
+		el("div", { class: "flabel" }, "Planned for"),
+		r.bakeDays.map(function (b) {
+			var off = el("button", { type: "button", class: "linkbtn" }, "Take off");
+			off.addEventListener("click", function () { off.disabled = true; takeOffBake(r, b.key, b.label); });
+			return el("div", { class: "row bakeday" }, el("b", null, b.label), off);
+		}));
+}
+/** From a baking recipe: pick a day this week or next. The dinner that day stays as it is. */
+function bakeOnDay(r) {
+	openSheet("Bake " + r.title + " on a day", function (close) {
+		var daysEl = el("div", { class: "stack", style: "gap:10px" }, el("div", { class: "small muted" }, "Loading the days\u2026"));
+		var busy = false;
+		var pick = function (d, on) {
+			if (busy) return;
+			busy = true;
+			close();
+			var label = d.dow + " " + d.num;
+			if (on) { takeOffBake(r, d.key, label); return; }
+			call("addBake", { day: d.key, recipeId: r.id }).then(function () { bakeSaved(r, r.title + " on " + label + (d.dinner ? ", with " + d.dinner.title : "")); })
+				.catch(function (e) { toast("It wasn't saved: " + e.message); });
+		};
+		var weekOf = function (w, label) {
+			freshDays(w);
+			var days = w.days.filter(function (d) { return !d.isPast; });
+			if (!days.length) return null;
+			return el("section", { class: "stack", style: "gap:6px" },
+				el("h2", null, label + " \u00b7 " + w.range),
+				el("div", { class: "nightpick" }, days.map(function (d) {
+					var on = (d.bakes || []).some(function (b) { return b.recipeId === r.id; });
+					return el("button", { type: "button", class: on ? "on" : "", onclick: function () { pick(d, on); } },
+						el("b", null, (d.isToday ? "Today" : d.dow) + " " + d.num),
+						el("span", { class: "small " + (d.dinner ? "" : "muted") }, on ? "On this day \u00b7 tap to take off" : d.dinner ? "with " + d.dinner.title : "No dinner yet"));
+				})));
+		};
+		Promise.all([call("week", { offset: 0 }), call("week", { offset: 1 })]).then(function (ws) {
+			daysEl.textContent = "";
+			add(daysEl, [weekOf(ws[0], "This week"), weekOf(ws[1], "Next week")]);
+		}).catch(function (e) {
+			daysEl.textContent = "";
+			daysEl.appendChild(el("div", { class: "error" }, "Couldn't load the days: " + e.message));
+		});
+		return el("div", { class: "stack", style: "gap:14px" },
+			el("div", { class: "small muted" }, "Its ingredients go on that week's shopping list, as the recipe says (not scaled)."),
+			daysEl);
 	});
 }
 
@@ -1478,6 +1556,15 @@ function openSheet(title, body) {
 }
 
 /* ---------------- shopping ---------------- */
+/** "From 5 dinners with a recipe, for 5, and 1 bake." */
+function fromText(s) {
+	var bakes = (s.dinners || []).filter(function (x) { return x.bake; }).length;
+	var dinners = (s.dinners || []).length - bakes;
+	var parts = [];
+	if (dinners) parts.push(dinners + " dinner" + (dinners === 1 ? "" : "s") + " with a recipe, for " + s.household);
+	if (bakes) parts.push(bakes + " bake" + (bakes === 1 ? "" : "s"));
+	return parts.length ? "From " + parts.join(", and ") + "." : "";
+}
 var shopOffset = 1; // which week the list is for: 1 = next week, 0 = this week
 var shopOffsetChosen = false; // chosen with the week buttons since the app opened
 var shopShownWeek = ""; // the first day of the week last shown, so it stays shown when it becomes "this week"
@@ -1704,7 +1791,7 @@ function screenShopping() {
 			info.style.display = addedOnly ? "none" : "";
 			if (shopping) add(info, [el("b", null, "Shopping now. "), "Tap things as they go in the basket. ", el("b", null, list.count + " to get.")]);
 			else if (!addedOnly) add(info, ["Everything for " + s.week.range + " is ticked to buy. ", el("b", null, "Untick what you already have."),
-				s.dinners.length ? el("div", { class: "muted", style: "margin-top:4px" }, "From " + s.dinners.length + " dinner" + (s.dinners.length === 1 ? "" : "s") + " with a recipe, for " + s.household + ".") : null]);
+				fromText(s) ? el("div", { class: "muted", style: "margin-top:4px" }, fromText(s)) : null]);
 			printBar.style.display = addedOnly ? "none" : "";
 			addSection.style.display = shopping ? "none" : "";
 			groupsEl.textContent = "";
@@ -1760,7 +1847,7 @@ function screenShopping() {
 			} else if (!list.groups.some(function (g) { return g.items.length; })) {
 				groupsEl.appendChild(el("div", { class: "card stack" },
 					el("b", null, "Nothing on the list yet."),
-					el("span", { class: "muted" }, s.dinners.length ? "" : "No dinners with a recipe are planned for " + s.week.range + ".")));
+					el("span", { class: "muted" }, s.dinners.length ? "" : "No dinners with a recipe (or baking) are planned for " + s.week.range + ".")));
 			}
 			printBtn.textContent = "";
 			add(printBtn, [icon("print"), "Print " + list.count + " item" + (list.count === 1 ? "" : "s")]);
