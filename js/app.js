@@ -98,7 +98,29 @@ function storeForget(prefixes) {
 function changed() {
 	cache.week = null;
 	cache.plan = null;
-	storeForget(["week", "shopping"]);
+	storeForget(["week"]);
+	// the shopping lists are asked for again, but one holding changes the Sheet hasn't got yet (no
+	// signal in the shop) is kept: they go onto the new list when it comes
+	try {
+		Object.keys(localStorage).forEach(function (k) {
+			if (k.indexOf(STORE + "shopping:") !== 0) return;
+			var e = storeEntry(k);
+			if (!(e && e.data && e.data.pending && e.data.pending.length)) localStorage.removeItem(k);
+		});
+	} catch (e) { /* nothing kept */ }
+}
+
+/*
+ * Swaps go to the calendar one at a time, in the order they were made: two quick drags (Mon with
+ * Wed, then Wed with Fri) could otherwise arrive the other way round and end differently from the
+ * screen. If one fails, the ones after it (made on top of it) aren't sent either.
+ */
+var swapChain = Promise.resolve();
+function swapQueued(keyA, keyB) {
+	var p = swapChain.then(function () { return call("swapDays", { dayA: keyA, dayB: keyB }); });
+	swapChain = p;
+	p.catch(function () { if (swapChain === p) swapChain = Promise.resolve(); });
+	return p;
 }
 
 /**
@@ -108,18 +130,18 @@ function changed() {
 function quick(action, extra, render, failed) {
 	var key = storeKey(action, extra);
 	var token = screenToken;
-	var kept = storeEntry(key);
+	var kept = keptEntry(action, extra);
 	var old = kept && kept.data;
 	var shown = old ? JSON.stringify(old) : null;
 	if (old) {
-		try { render(old, false); } catch (e) { shown = null; }
+		try { render(old, false, kept.at); } catch (e) { shown = null; }
 	}
 	return call(action, extra).then(function (data) {
 		storePut(key, data);
 		if (token !== screenToken) return;
 		if (JSON.stringify(data) === shown) return;
 		var y = window.scrollY;
-		render(data, true);
+		render(data, true, Date.now());
 		if (shown) window.scrollTo(0, y);
 	}).catch(function (e) {
 		if (token !== screenToken) return;
@@ -156,6 +178,76 @@ function londonKey(d) {
 	return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
 }
 function londonToday() { return londonKey(new Date()); }
+
+/** "2026-11-13" plus n days (n can be negative). */
+function addDaysKey(key, n) {
+	var p = String(key).split("-").map(Number);
+	return new Date(Date.UTC(p[0], p[1] - 1, p[2] + n)).toISOString().slice(0, 10);
+}
+/** Days from key a to key b. */
+function daysBetween(a, b) {
+	var pa = String(a).split("-").map(Number), pb = String(b).split("-").map(Number);
+	return Math.round((Date.UTC(pb[0], pb[1] - 1, pb[2]) - Date.UTC(pa[0], pa[1] - 1, pa[2])) / 864e5);
+}
+/** "2026-11-13" -> "Fri 13 Nov" (plus n days first, if given) */
+function dayText(key, plus) {
+	var k = plus ? addDaysKey(key, plus) : key;
+	var p = String(k).split("-").map(Number);
+	var d = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
+	return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()] + " " + p[2] + " " +
+		["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][p[1] - 1];
+}
+
+/**
+ * Is a kept answer still about the week it was asked for? "This week" and "next week" move on
+ * every Friday, so the copy kept as this week on Thursday night is last week by Friday morning.
+ */
+function stillCurrent(action, extra, data) {
+	if (!data) return false;
+	var today = londonToday();
+	if (action === "week") {
+		if (!data.days || !data.days.length) return false;
+		var t = addDaysKey(today, 7 * (Number(extra && extra.offset) || 0));
+		return data.days[0].key <= t && t <= data.days[data.days.length - 1].key;
+	}
+	if (action === "shopping") return Boolean(data.weeks && data.weeks[0] && data.weeks[1]) && data.weeks[0].start <= today && today < data.weeks[1].start;
+	return true;
+}
+
+/** The kept answer for a screen, if it's still about the right week (else null: ask the Sheet). */
+function keptEntry(action, extra) {
+	if (action === "shopping") tidyShopCopies();
+	var e = storeEntry(storeKey(action, extra));
+	return e && stillCurrent(action, extra, e.data) ? e : null;
+}
+
+/**
+ * The shopping lists are kept as "this week" and "next week". Once a new week starts, the one
+ * kept as next week is this week's: it's moved there, with any changes not saved yet, rather
+ * than being shown under the wrong week or written over. A week that's over is dropped.
+ */
+function tidyShopCopies() {
+	var today = londonToday();
+	[1, 0].forEach(function (o) {
+		var key = storeKey("shopping", { offset: o });
+		var e = storeEntry(key);
+		var s = e && e.data;
+		if (!s || stillCurrent("shopping", null, s)) return;
+		try { localStorage.removeItem(key); } catch (x) { /* nothing kept */ }
+		if (!s.weeks || !s.weeks[0] || !s.week) return;
+		var since = daysBetween(s.weeks[0].start, today);
+		if (since < 0) return; // the phone's clock went back
+		var thisStart = addDaysKey(s.weeks[0].start, 7 * Math.floor(since / 7));
+		var n = s.week.start === thisStart ? 0 : s.week.start === addDaysKey(thisStart, 7) ? 1 : -1;
+		if (n === -1) return; // that week is over
+		var to = storeKey("shopping", { offset: n });
+		var there = storeEntry(to);
+		if (there && stillCurrent("shopping", null, there.data)) return; // already fetched since
+		s.offset = n;
+		s.weeks = [thisStart, addDaysKey(thisStart, 7)].map(function (k) { return { start: k, range: dayText(k) + " \u2013 " + dayText(k, 6) }; });
+		storePut(to, s, e.at);
+	});
+}
 
 /**
  * Which day is tonight, and which have gone, worked out here from each day's date: a kept copy
@@ -351,7 +443,7 @@ var wide = window.matchMedia("(min-width: 1000px)");
 var main = document.getElementById("main");
 var side = document.getElementById("side");
 var current = { name: "week", args: {} };
-var cache = { week: null, plan: null };
+var cache = { week: null, weekAt: 0, plan: null };
 
 var stack = [];
 function hashFor(name, args) {
@@ -406,7 +498,8 @@ function show() {
 	window.scrollTo(0, 0);
 	var a = current.args;
 	wideDrawn = wide.matches;
-	if (wide.matches) renderSide();
+	// the Week screen draws the side list itself, from the same answer
+	if (wide.matches && !(current.name === "week" && !(Number(a.offset) < 0) && getSettings().url)) renderSide();
 	if (current.name === "recipe") return screenRecipe(a.id, a.day);
 	if (current.name === "edit") return screenEdit(a.id, a.day);
 	if (current.name === "swap") return screenSwap(a.day);
@@ -424,13 +517,52 @@ var printing = false;
 window.addEventListener("beforeprint", function () { printing = true; });
 window.addEventListener("afterprint", function () {
 	printing = false;
-	if (wide.matches !== wideDrawn) show();
+	if (wide.matches !== wideDrawn) relayout();
 });
 var wideDrawn = wide.matches;
 wide.addEventListener("change", function () {
 	if (printing || window.matchMedia("print").matches || wide.matches === wideDrawn) return;
-	show();
+	relayout();
 });
+/**
+ * The window went from laptop width to phone width or back. Only the Week screen is laid out
+ * differently; any other screen keeps what's on it (a recipe note being typed, a new photo, a
+ * plan) and just gets the side list.
+ */
+function relayout() {
+	if (current.name === "week" && !inTheMiddle()) { show(); return; }
+	wideDrawn = wide.matches;
+	if (wide.matches) renderSide();
+}
+/** Part-way through something on screen that a redraw would lose. */
+function inTheMiddle() {
+	var a = document.activeElement;
+	return Boolean((a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) || ["edit", "plan", "swap", "settings", "setup"].indexOf(current.name) !== -1 ||
+		document.querySelector(".overlay") || printing);
+}
+
+/*
+ * A new day: "tonight", "this week" and "next week" move on at midnight (and every Friday). An
+ * app left open overnight, or brought back from the background, starts again from the Sheet
+ * rather than from yesterday's copies. Screens you could be part-way through (editing a recipe,
+ * planning, typing) aren't redrawn under you: just the side list.
+ */
+var shownDay = londonToday();
+function checkNewDay() {
+	if (document.visibilityState === "hidden") return;
+	var today = londonToday();
+	if (today === shownDay) return;
+	shownDay = today;
+	cache.week = null;
+	cache.plan = null;
+	lastPrefetch = 0;
+	if (inTheMiddle()) { if (wide.matches) renderSide(); return; }
+	show();
+}
+document.addEventListener("visibilitychange", checkNewDay);
+window.addEventListener("pageshow", checkNewDay);
+window.addEventListener("focus", checkNewDay);
+setInterval(checkNewDay, 60 * 1000);
 
 /* ---------------- This week ---------------- */
 var PLAN_FRESH_MS = 5 * 60 * 1000;
@@ -440,19 +572,49 @@ var PLAN_FRESH_MS = 5 * 60 * 1000;
  * a few seconds to work them out), so Plan usually opens at once. Kept for 5 minutes, and
  * dropped whenever a dinner changes.
  */
+function planReady() {
+	// "next week" is a different week after Thursday night
+	return Boolean(cache.plan) && Date.now() - cache.plan.at < PLAN_FRESH_MS && cache.plan.day === londonToday();
+}
 function loadPlan(prefetch) {
-	if (cache.plan && Date.now() - cache.plan.at < PLAN_FRESH_MS) return cache.plan.promise;
+	if (planReady()) return cache.plan.promise;
 	if (prefetch && !navigator.onLine) return null;
-	var entry = { at: Date.now(), promise: call("planOptions", { exclude: [] }, { quiet: prefetch }) };
+	var entry = { at: Date.now(), day: londonToday(), promise: call("planOptions", { exclude: [] }, { quiet: prefetch }) };
 	entry.promise.catch(function () { if (cache.plan === entry) cache.plan = null; });
 	cache.plan = entry;
 	return entry.promise;
 }
 
-function loadWeek(force) {
-	if (!cache.week && !force) cache.week = storeGet(storeKey("week", { offset: 0 }));
-	if (cache.week && !force) return Promise.resolve(freshDays(cache.week));
-	return call("week", { offset: 0 }).then(function (w) { cache.week = freshDays(w); return w; });
+var WEEK_FRESH_MS = 2 * 60 * 1000;
+function keepWeek(w, at) {
+	cache.week = freshDays(w);
+	cache.weekAt = at === undefined ? Date.now() : at || 0; // null: a copy of unknown age
+	return cache.week;
+}
+function fetchWeek() {
+	return call("week", { offset: 0 }).then(function (w) {
+		storePut(storeKey("week", { offset: 0 }), w);
+		return keepWeek(w);
+	});
+}
+/**
+ * This week, for the side list: the copy in memory or on the phone if it's still this week
+ * (not last week's, after a Thursday night), else from the Sheet. With newer(w), a copy more
+ * than a couple of minutes old is checked with the Sheet too, and newer runs if it changed.
+ */
+function loadWeek(force, newer) {
+	if (!force && !(cache.week && stillCurrent("week", { offset: 0 }, cache.week))) {
+		var e = keptEntry("week", { offset: 0 });
+		if (e) keepWeek(e.data, e.at); else cache.week = null;
+	}
+	if (cache.week && !force) {
+		if (newer && Date.now() - (cache.weekAt || 0) > WEEK_FRESH_MS) {
+			var before = JSON.stringify(cache.week);
+			fetchWeek().then(function (w) { if (JSON.stringify(w) !== before) newer(w); }).catch(function () { /* the copy stays */ });
+		}
+		return Promise.resolve(freshDays(cache.week));
+	}
+	return fetchWeek();
 }
 
 function dayRow(d, w, compact) {
@@ -579,9 +741,9 @@ function swapWeekDays(w, keyA, keyB) {
 	var name = function (d) { return d.dow + " " + d.num; };
 	var t = a.dinner; a.dinner = b.dinner; b.dinner = t;
 	if (a.isToday || b.isToday) w.tonightPhoto = null; // tonight's photo was the other dinner's
-	var redraw = function () { cache.week = w; storePut(storeKey("week", { offset: 0 }), w); show(); };
+	var redraw = function () { keepWeek(w); storePut(storeKey("week", { offset: 0 }), w); show(); };
 	redraw();
-	call("swapDays", { dayA: keyA, dayB: keyB }).then(function () {
+	swapQueued(keyA, keyB).then(function () {
 		changed();
 		redraw();
 		toast("Swapped " + name(a) + " and " + name(b));
@@ -632,11 +794,11 @@ function screenWeek(offset) {
 	if (offset < 0) return screenPastWeek(offset);
 	loading(main);
 	var token = screenToken;
-	quick("week", { offset: 0 }, function (w) {
-		cache.week = freshDays(w);
+	quick("week", { offset: 0 }, function (w, fresh, at) {
+		keepWeek(w, at);
 		if (current.name !== "week") return;
 		if (wide.matches) {
-			renderSide();
+			drawSide(w);
 			var t = w.days.filter(function (d) { return d.isToday; })[0];
 			if (t && t.dinner && t.dinner.recipeId) return screenRecipe(t.dinner.recipeId, t.key, true);
 			main.textContent = "";
@@ -661,12 +823,19 @@ function screenWeek(offset) {
 	});
 }
 
+var sideToken = 0; // a late answer doesn't draw over a newer side list
+function drawSide(w) {
+	sideToken++;
+	side.textContent = "";
+	add(side, [el("div", { class: "row sidehead" }, el("span", null, "This week \u00b7 " + w.range),
+		el("button", { type: "button", class: "linkbtn", onclick: function () { go("week", { offset: -1 }); } }, "\u2039 Last week")), weekList(w, true)]);
+}
 function renderSide() {
-	loadWeek(false).then(function (w) {
-		side.textContent = "";
-		add(side, [el("div", { class: "row sidehead" }, el("span", null, "This week \u00b7 " + w.range),
-			el("button", { type: "button", class: "linkbtn", onclick: function () { go("week", { offset: -1 }); } }, "\u2039 Last week")), weekList(w, true)]);
-	}).catch(function () { side.textContent = ""; });
+	var token = ++sideToken;
+	var draw = function (w) { if (token === sideToken) { drawSide(w); token = sideToken; } };
+	loadWeek(false, function (w) { if (wide.matches) draw(w); })
+		.then(draw)
+		.catch(function () { if (token === sideToken) side.textContent = ""; });
 }
 
 /* ---------------- a recipe ---------------- */
@@ -884,11 +1053,11 @@ function screenSwap(dayKey) {
 	Promise.all([call("swapOptions", { day: dayKey }), call("recipes")]).then(function (res) {
 		var o = res[0], all = res[1].recipes;
 		var busy = false;
-		var done = function (p, msg) {
-			if (busy) return;
+		var done = function (send, msg) {
+			if (busy) return; // a second tap while the first is saving
 			busy = true;
 			main.style.opacity = "0.6";
-			p.then(function () {
+			send().then(function () {
 				changed();
 				toast(msg);
 				go("week", {}, true);
@@ -898,7 +1067,7 @@ function screenSwap(dayKey) {
 				toast(e.message || "Couldn't save");
 			});
 		};
-		var put = function (r) { return function () { done(call("setDinner", { day: dayKey, choice: { recipeId: r.id } }), r.title + " is on " + o.day.label); }; };
+		var put = function (r) { return function () { done(function () { return call("setDinner", { day: dayKey, choice: { recipeId: r.id } }); }, r.title + " is on " + o.day.label); }; };
 		var results = el("div", { class: "stack" });
 		var search = el("input", { id: "find", class: "field", type: "search", placeholder: "Type a name, e.g. soup", autocomplete: "off" });
 		search.addEventListener("input", function () {
@@ -918,7 +1087,7 @@ function screenSwap(dayKey) {
 			// swapping with another night this week is the most likely change, so it comes first
 			others.length ? el("section", { class: "stack" }, el("h2", null, "Swap with another day"),
 				el("div", { class: "list" }, others.map(function (x) {
-					return el("button", { type: "button", onclick: function () { done(call("swapDays", { dayA: dayKey, dayB: x.key }), "Swapped " + o.day.label + " and " + x.label); } },
+					return el("button", { type: "button", onclick: function () { done(function () { return swapQueued(dayKey, x.key); }, "Swapped " + o.day.label + " and " + x.label); } },
 						el("b", null, x.label), el("span", { class: x.title ? "" : "muted" }, x.title || "Nothing planned"));
 				}))) : null,
 			o.suggestions.length ? el("section", { class: "stack" }, el("h2", null, "Suggestions"),
@@ -926,7 +1095,7 @@ function screenSwap(dayKey) {
 			el("section", { class: "stack" }, el("label", { for: "find", class: "lab", style: "font-size:15px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)" }, "Or find a recipe"), search, results),
 			el("section", { class: "stack" }, el("h2", null, "Something else"),
 				otherDinner(o.noCooking || NO_COOKING, function (t, quick) {
-					done(call("setDinner", { day: dayKey, choice: quick ? { noCooking: t } : { text: t } }), t + " on " + o.day.label);
+					done(function () { return call("setDinner", { day: dayKey, choice: quick ? { noCooking: t } : { text: t } }); }, t + " on " + o.day.label);
 				})),
 			el("p", { class: "small muted", style: "margin:0" }, "Your choice goes straight into the Dinners calendar and onto the fridge.")
 		]);
@@ -948,10 +1117,37 @@ function loadDraft(weekStart) {
 }
 function saveDraft(weekStart, draft) {
 	try {
-		Object.keys(localStorage).forEach(function (k) { if (k.indexOf(DRAFT_KEY) === 0 && k !== DRAFT_KEY + weekStart) localStorage.removeItem(k); });
+		// drafts for weeks that are over go; one for the week just started stays (see unsavedPlan)
+		var today = londonToday();
+		Object.keys(localStorage).forEach(function (k) {
+			if (k.indexOf(DRAFT_KEY) === 0 && k !== DRAFT_KEY + weekStart && !(addDaysKey(k.slice(DRAFT_KEY.length), 7) > today)) localStorage.removeItem(k);
+		});
 		if (draft) localStorage.setItem(DRAFT_KEY + weekStart, JSON.stringify(draft)); else localStorage.removeItem(DRAFT_KEY + weekStart);
 	} catch (e) { /* private window: the plan just isn't kept */ }
 }
+
+/**
+ * A plan picked but not saved before its week began (planned on Thursday night, still open after
+ * midnight): { start, picks } for the nights still to come, so Plan can offer to save them.
+ */
+function unsavedPlan(nextStart) {
+	var today = londonToday();
+	var found = null;
+	try {
+		Object.keys(localStorage).forEach(function (k) {
+			if (k.indexOf(DRAFT_KEY) !== 0) return;
+			var start = k.slice(DRAFT_KEY.length);
+			if (!(addDaysKey(start, 7) > today)) { localStorage.removeItem(k); return; } // that week is over
+			if (start === nextStart || start > today) return;
+			var d = loadDraft(start);
+			var picks = {};
+			Object.keys((d && d.picks) || {}).forEach(function (day) { if (day >= today) picks[day] = d.picks[day]; });
+			if (Object.keys(picks).length) found = { start: start, picks: picks };
+		});
+	} catch (e) { /* none */ }
+	return found;
+}
+function dropDraft(weekStart) { try { localStorage.removeItem(DRAFT_KEY + weekStart); } catch (e) { /* none kept */ } }
 
 var planFilter = newFilter(); // kept while the app is open
 
@@ -977,7 +1173,7 @@ function drawPool(pool, size, share, skip) {
 }
 
 function screenPlan() {
-	var ready = cache.plan && Date.now() - cache.plan.at < PLAN_FRESH_MS;
+	var ready = planReady();
 	loading(main);
 	if (!ready) main.querySelector(".loading").textContent = "Finding suggestions…";
 	busyTrack(loadPlan(false)).then(function (o) {
@@ -1022,12 +1218,14 @@ function screenPlan() {
 			};
 			flip();
 			if (!a.dinner && !b.dinner) { toast("Swapped " + a.dayName + " and " + b.dayName); return; }
-			call("swapDays", { dayA: keyA, dayB: keyB }).then(function () {
+			swapQueued(keyA, keyB).then(function () {
 				changed();
 				toast("Swapped " + a.dayName + " and " + b.dayName + " (in the calendar too)");
 			}).catch(function (e) {
-				flip(); // back as it was
+				// the calendar is as it was: show it again from there (the picks stay as moved)
+				changed();
 				toast("The swap wasn't saved: " + e.message);
+				if (current.name === "plan") show();
 			});
 		};
 
@@ -1164,10 +1362,37 @@ function screenPlan() {
 
 		draw();
 		fetchPhotos();
+		// picked for the week that has just started, but never saved
+		var lost = unsavedPlan(start);
+		var lostNote = null;
+		if (lost) {
+			var lostDays = Object.keys(lost.picks).sort();
+			var lostNames = lostDays.map(function (k) { return dayText(k).split(" ")[0] + " " + (lost.picks[k].title || lost.picks[k].text); });
+			var saveLabel = "Save " + (lostDays.length === 1 ? "it" : "them");
+			var saveLost = el("button", { type: "button", class: "btn primary" }, saveLabel);
+			saveLost.addEventListener("click", function () {
+				saveLost.disabled = true;
+				saveLost.textContent = "Saving\u2026";
+				var list = lostDays.map(function (k) { var p = lost.picks[k]; return p.id ? { day: k, recipeId: p.id } : { day: k, text: p.text }; });
+				call("savePlan", { picks: list }).then(function (res) {
+					dropDraft(lost.start);
+					changed();
+					toast(res.saved.length + " dinner" + (res.saved.length === 1 ? "" : "s") + " saved for this week" +
+						(res.skipped.length ? ". " + res.skipped.length + " night" + (res.skipped.length === 1 ? " was" : "s were") + " already taken" : ""));
+					go("plan", {}, true);
+				}).catch(function (e) { saveLost.disabled = false; saveLost.textContent = saveLabel; toast(e.message); });
+			});
+			lostNote = el("div", { class: "notice", role: "status" },
+				el("b", null, "This week's plan wasn't saved."),
+				el("div", null, "You picked these for " + dayText(lost.start) + " \u2013 " + dayText(lost.start, 6) + ": " + lostNames.join(", ") + "."),
+				el("div", { class: "frow" }, saveLost,
+					el("button", { type: "button", class: "btn", onclick: function () { dropDraft(lost.start); lostNote.remove(); } }, "Throw away")));
+		}
 		main.textContent = "";
 		add(main, [
 			el("button", { type: "button", class: "back", onclick: back }, icon("back"), "Back"),
 			el("div", { class: "row", style: "align-items:baseline" }, el("h1", { style: "font-size:24px" }, "Plan " + o.week.range), null),
+			lostNote,
 			el("section", { class: "stack" }, el("div", { class: "row" }, el("h2", null, "The week"), count), nights),
 			el("section", { class: "stack" },
 				el("div", { class: "row" }, el("h2", null, "Suggestions"), el("span", { class: "small muted" }, "Tap one to see it")),
@@ -1255,6 +1480,9 @@ function openSheet(title, body) {
 /* ---------------- shopping ---------------- */
 var shopOffset = 1; // which week the list is for: 1 = next week, 0 = this week
 var shopOffsetChosen = false; // chosen with the week buttons since the app opened
+var shopShownWeek = ""; // the first day of the week last shown, so it stays shown when it becomes "this week"
+var shopRetry = null; // the open list's "try saving again"
+window.addEventListener("online", function () { if (shopRetry) shopRetry(); });
 // after a shop, the things not got stay on that week's list; the next few days, open that week
 function rememberLeftovers(week, n) {
 	try { if (n) localStorage.setItem("dinners.leftover", week); else localStorage.removeItem("dinners.leftover"); } catch (e) { /* just a convenience */ }
@@ -1266,12 +1494,15 @@ var shopView = "all"; // "added": just the things added by hand, for a quick tri
 try { if (localStorage.getItem("dinners.shopView") === "added") shopView = "added"; } catch (e) { /* default */ }
 
 function screenShopping() {
+	var today = londonToday();
+	var hasStarted = function (start) { return Boolean(start) && start <= today && today < addDaysKey(start, 7); };
 	// just back from the shop with things still to get: open that week (now "this week")
-	if (!shopOffsetChosen) {
-		var thisWeek = cache.week || storeGet(storeKey("week", { offset: 0 }));
-		var start = thisWeek && thisWeek.days && thisWeek.days[0] ? thisWeek.days[0].key : "";
-		if (start && leftoverWeek() === start) shopOffset = 0;
-	}
+	if (!shopOffsetChosen && hasStarted(leftoverWeek())) shopOffset = 0;
+	// the week you were looking at as "next week" has started since (a Friday): it's this week now
+	if (shopOffset === 1 && hasStarted(shopShownWeek)) shopOffset = 0;
+	// changes made here that the Sheet hadn't got yet (no signal): carried onto its fresh answer
+	var before = keptEntry("shopping", { offset: shopOffset });
+	var carried = before && before.data.pending && before.data.pending.length ? { week: before.data.week.start, pending: before.data.pending } : null;
 	loading(main);
 	document.body.classList.add("shopping");
 	var touched = false; // once you've ticked or added something, a late answer from the Sheet doesn't redraw over it
@@ -1280,6 +1511,8 @@ function screenShopping() {
 	var syncSheet = null; // saves the list to the Sheet if it differs from what the Sheet has
 	quick("shopping", { offset: shopOffset }, function (s, fresh) {
 		if (current.name !== "shopping" || (fresh && touched)) return;
+		shopShownWeek = s.week.start;
+		if (fresh && !s.pending && carried && carried.week === s.week.start) s.pending = carried.pending;
 		// what the Sheet had (s.saved) plus the changes made here since (s.pending), in order
 		var pending = (s.pending || []).slice();
 		var base = s.saved.sig; // the Sheet's list these changes were made on
@@ -1329,7 +1562,12 @@ function screenShopping() {
 			storePut(storeAt, s);
 			mine = s;
 		};
-		var sending = false, again = false, tries = 0;
+		var sending = false, again = false, tries = 0, failed = false, retryTimer = null;
+		var myToken = screenToken;
+		// no signal (in the shop): tried again every half a minute, and when the phone is back
+		// online, while the list is open. Closed, the changes wait on the phone for the next time.
+		var retry = function () { if (pending.length && !sending && myToken === screenToken && current.name === "shopping") send(); };
+		shopRetry = retry;
 		var send = function () {
 			if (sending) { again = true; return; }
 			sending = true;
@@ -1349,6 +1587,7 @@ function screenShopping() {
 					return;
 				}
 				tries = 0;
+				failed = false;
 				pending = pending.slice(sent);
 				base = res && typeof res.sig === "string" ? res.sig : sigOf(rows);
 				var qtys = {};
@@ -1358,7 +1597,10 @@ function screenShopping() {
 				if (again) { again = false; send(); }
 			}).catch(function (e) {
 				sending = false;
-				toast("The list wasn't saved: " + e.message);
+				if (!failed) toast("The list wasn't saved yet: " + e.message + " It's kept on this phone and tried again.");
+				failed = true;
+				clearTimeout(retryTimer);
+				retryTimer = setTimeout(retry, 30000);
 			});
 		};
 		var save = function (now) {
@@ -1543,7 +1785,7 @@ function screenShopping() {
 			var p = FridgeShop.paper(list);
 			paperEl.textContent = "";
 			add(paperEl, [
-				el("div", { class: "phead" }, el("b", null, "Shopping · " + s.today), el("span", null, "for " + s.week.range)),
+				el("div", { class: "phead" }, el("b", null, "Shopping · " + dayText(today)), el("span", null, "for " + s.week.range)),
 				el("div", { class: "pcols", style: "grid-template-columns:repeat(" + Math.max(1, p.columns.length) + ",minmax(0,1fr))" }, p.columns.map(function (c) {
 					var fill = el("div", { class: "pfill" });
 					for (var i = 0; i < 40; i++) fill.appendChild(el("div", { class: "pline" }, ""));
@@ -1589,16 +1831,10 @@ function screenShopping() {
 		drawSections();
 
 		// "This week · Thu 12 Nov" (its last day, the next big shop) and "Next week · Fri 13 Nov" (its first day)
-		var dayLabel = function (key, plus) {
-			var p = key.split("-").map(Number);
-			var d = new Date(p[0], p[1] - 1, p[2] + (plus || 0));
-			return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()] + " " + d.getDate() + " " +
-				["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
-		};
 		var weekBtn = function (n) {
 			var w = s.weeks[n];
-			return el("button", { type: "button", class: "toggle", "aria-pressed": String(s.offset === n), onclick: function () { if (s.offset !== n) { shopOffset = n; shopOffsetChosen = true; screenToken++; screenShopping(); } } },
-				n ? "Next week \u00b7 " + dayLabel(w.start) : "This week \u00b7 " + dayLabel(w.start, 6));
+			return el("button", { type: "button", class: "toggle", "aria-pressed": String(s.offset === n), onclick: function () { if (s.offset !== n) { shopOffset = n; shopOffsetChosen = true; shopShownWeek = w.start; screenToken++; screenShopping(); } } },
+				n ? "Next week \u00b7 " + dayText(w.start) : "This week \u00b7 " + dayText(w.start, 6));
 		};
 
 		add(addSection, [
@@ -1609,7 +1845,7 @@ function screenShopping() {
 		draw();
 		main.textContent = "";
 		add(main, [
-			el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Shopping"), el("span", { class: "small muted" }, s.today)),
+			el("div", { class: "row", style: "align-items:baseline" }, el("h1", null, "Shopping"), el("span", { class: "small muted" }, dayText(today))),
 			el("div", { class: "frow" }, weekBtn(0), weekBtn(1)),
 			viewRow,
 			info,
